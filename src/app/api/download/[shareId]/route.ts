@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { readFile } from 'fs/promises';
 
 export async function GET(
   request: NextRequest,
@@ -21,12 +20,7 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    let fileBuffer: Buffer;
-    try {
-      fileBuffer = await readFile(file.path);
-    } catch {
-      return NextResponse.json({ error: 'El archivo ya no existe en el servidor.' }, { status: 410 });
-    }
+    const fileBuffer = Buffer.from(file.data);
 
     return new NextResponse(fileBuffer, {
       headers: {

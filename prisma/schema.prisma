@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -17,16 +17,15 @@ model User {
 }
 
 model File {
-  id        String   @id @default(cuid())
-  name      String
+  id           String   @id @default(cuid())
   originalName String
-  mimeType  String
-  size      Int
-  path      String
-  shareId   String   @unique
-  downloads Int      @default(0)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  mimeType     String
+  size         Int
+  data         Bytes
+  shareId      String   @unique
+  downloads    Int      @default(0)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }

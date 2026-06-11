@@ -412,7 +412,7 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
         <DialogHeader>
           <DialogTitle>Subir archivos</DialogTitle>
           <DialogDescription>
-            Arrastra archivos aquí o haz clic para seleccionar. Máximo 500MB por archivo.
+            Arrastra archivos aquí o haz clic para seleccionar. Máximo 50MB por archivo.
           </DialogDescription>
         </DialogHeader>
 

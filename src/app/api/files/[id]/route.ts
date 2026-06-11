@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getSession } from '@/lib/auth';
-import { unlink } from 'fs/promises';
 
 export async function DELETE(
   request: NextRequest,
@@ -21,12 +20,6 @@ export async function DELETE(
 
     if (!file) {
       return NextResponse.json({ error: 'Archivo no encontrado.' }, { status: 404 });
-    }
-
-    try {
-      await unlink(file.path);
-    } catch {
-      // File might not exist
     }
 
     await db.file.delete({ where: { id } });

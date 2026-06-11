@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getSession } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
 import { randomUUID } from 'crypto';
 
 export async function POST(request: NextRequest) {
@@ -19,11 +17,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No se proporcionó ningún archivo.' }, { status: 400 });
     }
 
-    // Limit to 500MB
-    const MAX_SIZE = 500 * 1024 * 1024;
+    // Limit to 50MB (Vercel serverless body limit)
+    const MAX_SIZE = 50 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       return NextResponse.json(
-        { error: 'El archivo excede el límite de 500MB.' },
+        { error: 'El archivo excede el límite de 50MB.' },
         { status: 400 }
       );
     }
@@ -32,22 +30,13 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
 
     const shareId = randomUUID();
-    const ext = path.extname(file.name) || '';
-    const storedName = `${shareId}${ext}`;
-
-    const uploadDir = path.join(process.cwd(), 'uploads', session.userId);
-    await mkdir(uploadDir, { recursive: true });
-
-    const filePath = path.join(uploadDir, storedName);
-    await writeFile(filePath, buffer);
 
     const fileRecord = await db.file.create({
       data: {
-        name: storedName,
         originalName: file.name,
         mimeType: file.type || 'application/octet-stream',
         size: file.size,
-        path: filePath,
+        data: buffer,
         shareId,
         userId: session.userId,
       },
