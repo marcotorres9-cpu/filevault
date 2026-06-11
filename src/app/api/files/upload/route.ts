@@ -17,11 +17,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No se proporcionó ningún archivo.' }, { status: 400 });
     }
 
-    // Limit to 50MB (Vercel serverless body limit)
-    const MAX_SIZE = 50 * 1024 * 1024;
+    // Limit to 100MB
+    const MAX_SIZE = 100 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       return NextResponse.json(
-        { error: 'El archivo excede el límite de 50MB.' },
+        { error: 'El archivo excede el límite de 100MB.' },
         { status: 400 }
       );
     }
