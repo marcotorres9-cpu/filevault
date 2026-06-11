@@ -16,8 +16,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "FileVault - Alojamiento de Archivos",
   description: "Sube, comparte y descarga archivos de forma rápida y sencilla. Tu plataforma de alojamiento personal.",
+  manifest: "/manifest.json",
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/icon-192.png",
+    apple: "/icon-192.png",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 
