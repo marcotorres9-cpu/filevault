@@ -21,15 +21,18 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    // Stream file from R2
+    // Get file from R2
     const r2Response = await getFromR2(file.r2Key);
-    const stream = r2Response.Body;
+    const body = r2Response.Body;
 
-    if (!stream) {
+    if (!body) {
       return NextResponse.json({ error: 'Archivo no encontrado en almacenamiento.' }, { status: 404 });
     }
 
-    return new NextResponse(stream as ReadableStream, {
+    // Convert SDK stream to web ReadableStream
+    const webStream = body.transformToWebStream();
+
+    return new NextResponse(webStream, {
       headers: {
         'Content-Type': file.mimeType,
         'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
