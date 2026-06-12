@@ -4,14 +4,21 @@ import { db } from '@/lib/db';
 export async function GET() {
   try {
     await db.user.count();
-    // Check if r2Key column exists by trying to query it
+    
+    // Migrate: drop NOT NULL from old 'data' column and add 'r2Key' column
     try {
-      await db.file.findFirst({ select: { r2Key: true } });
+      await db.$executeRawUnsafe(`ALTER TABLE "File" ALTER COLUMN "data" DROP NOT NULL`);
     } catch {
-      // Column doesn't exist, need to migrate
-      await db.$executeRawUnsafe(`ALTER TABLE "File" ADD COLUMN IF NOT EXISTS "r2Key" TEXT NOT NULL DEFAULT ''`);
+      // Column might already be nullable or removed
     }
-    return NextResponse.json({ status: 'ok', message: 'Base de datos ya inicializada.' });
+    
+    try {
+      await db.$executeRawUnsafe(`ALTER TABLE "File" ADD COLUMN IF NOT EXISTS "r2Key" TEXT NOT NULL DEFAULT ''`);
+    } catch {
+      // Column might already exist
+    }
+
+    return NextResponse.json({ status: 'ok', message: 'Base de datos actualizada.' });
   } catch {
     try {
       const statements = [
