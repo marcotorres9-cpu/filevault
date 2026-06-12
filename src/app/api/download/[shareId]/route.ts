@@ -21,22 +21,16 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    // Get file from R2
+    // Get file from R2 as buffer
     const r2Response = await getFromR2(file.r2Key);
-    const body = r2Response.Body;
+    const byteArray = await r2Response.Body!.transformToByteArray();
+    const buffer = Buffer.from(byteArray);
 
-    if (!body) {
-      return NextResponse.json({ error: 'Archivo no encontrado en almacenamiento.' }, { status: 404 });
-    }
-
-    // Convert SDK stream to web ReadableStream
-    const webStream = body.transformToWebStream();
-
-    return new NextResponse(webStream, {
+    return new NextResponse(buffer, {
       headers: {
         'Content-Type': file.mimeType,
         'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-        'Content-Length': file.size.toString(),
+        'Content-Length': buffer.length.toString(),
       },
     });
   } catch (error) {
