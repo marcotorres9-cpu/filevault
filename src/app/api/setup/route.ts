@@ -4,6 +4,13 @@ import { db } from '@/lib/db';
 export async function GET() {
   try {
     await db.user.count();
+    // Check if r2Key column exists by trying to query it
+    try {
+      await db.file.findFirst({ select: { r2Key: true } });
+    } catch {
+      // Column doesn't exist, need to migrate
+      await db.$executeRawUnsafe(`ALTER TABLE "File" ADD COLUMN IF NOT EXISTS "r2Key" TEXT NOT NULL DEFAULT ''`);
+    }
     return NextResponse.json({ status: 'ok', message: 'Base de datos ya inicializada.' });
   } catch {
     try {
@@ -21,7 +28,7 @@ export async function GET() {
           "originalName" TEXT NOT NULL,
           "mimeType" TEXT NOT NULL,
           "size" INTEGER NOT NULL,
-          "data" BYTEA NOT NULL,
+          "r2Key" TEXT NOT NULL DEFAULT '',
           "shareId" TEXT NOT NULL,
           "downloads" INTEGER NOT NULL DEFAULT 0,
           "userId" TEXT NOT NULL,

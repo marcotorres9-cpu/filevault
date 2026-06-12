@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getFromR2 } from '@/lib/r2';
 
 export async function GET(
   request: NextRequest,
@@ -20,13 +21,19 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    const fileBuffer = Buffer.from(file.data);
+    // Stream file from R2
+    const r2Response = await getFromR2(file.r2Key);
+    const stream = r2Response.Body;
 
-    return new NextResponse(fileBuffer, {
+    if (!stream) {
+      return NextResponse.json({ error: 'Archivo no encontrado en almacenamiento.' }, { status: 404 });
+    }
+
+    return new NextResponse(stream as ReadableStream, {
       headers: {
         'Content-Type': file.mimeType,
         'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-        'Content-Length': fileBuffer.length.toString(),
+        'Content-Length': file.size.toString(),
       },
     });
   } catch (error) {
