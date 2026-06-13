@@ -21,7 +21,7 @@ model File {
   originalName String
   mimeType     String
   size         Int
-  r2Key        String
+  data         Bytes
   shareId      String   @unique
   downloads    Int      @default(0)
   userId       String

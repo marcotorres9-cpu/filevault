@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getFromR2 } from '@/lib/r2';
 
 export async function GET(
   request: NextRequest,
@@ -21,16 +20,13 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    // Get file from R2 as buffer
-    const r2Response = await getFromR2(file.r2Key);
-    const byteArray = await r2Response.Body!.transformToByteArray();
-    const buffer = Buffer.from(byteArray);
+    const fileBuffer = Buffer.from(file.data);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(fileBuffer, {
       headers: {
         'Content-Type': file.mimeType,
         'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
-        'Content-Length': buffer.length.toString(),
+        'Content-Length': fileBuffer.length.toString(),
       },
     });
   } catch (error) {

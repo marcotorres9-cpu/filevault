@@ -366,53 +366,12 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
     let failed = 0;
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+      const formData = new FormData();
+      formData.append('file', files[i]);
+
       try {
-        // Step 1: Get presigned URL from our API (small request, no file data)
-        const presignRes = await fetch('/api/files/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: file.name,
-            fileSize: file.size,
-            mimeType: file.type || 'application/octet-stream',
-          }),
-        });
-
-        if (!presignRes.ok) {
-          failed++;
-          setProgress(Math.round(((i + 1) / files.length) * 100));
-          continue;
-        }
-
-        const { uploadUrl, r2Key } = await presignRes.json();
-
-        // Step 2: Upload file DIRECTLY to R2 (bypasses Vercel 4.5MB limit)
-        const uploadRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        });
-
-        if (!uploadRes.ok) {
-          failed++;
-          setProgress(Math.round(((i + 1) / files.length) * 100));
-          continue;
-        }
-
-        // Step 3: Confirm - save metadata to database
-        const confirmRes = await fetch('/api/files/confirm', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            r2Key,
-            originalName: file.name,
-            mimeType: file.type || 'application/octet-stream',
-            size: file.size,
-          }),
-        });
-
-        if (confirmRes.ok) success++;
+        const res = await fetch('/api/files/upload', { method: 'POST', body: formData });
+        if (res.ok) success++;
         else failed++;
       } catch {
         failed++;
@@ -453,7 +412,7 @@ function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
         <DialogHeader>
           <DialogTitle>Subir archivos</DialogTitle>
           <DialogDescription>
-            Arrastra archivos aquí o haz clic para seleccionar. Máximo 5GB por archivo.
+            Arrastra archivos aquí o haz clic para seleccionar. Máximo 100MB por archivo.
           </DialogDescription>
         </DialogHeader>
 
