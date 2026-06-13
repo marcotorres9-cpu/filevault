@@ -4,7 +4,21 @@ import { db } from '@/lib/db';
 export async function GET() {
   try {
     await db.user.count();
-    return NextResponse.json({ status: 'ok', message: 'Base de datos ya inicializada.' });
+    
+    // Migrate: drop NOT NULL from old 'data' column and add 'r2Key' column
+    try {
+      await db.$executeRawUnsafe(`ALTER TABLE "File" ALTER COLUMN "data" DROP NOT NULL`);
+    } catch {
+      // Column might already be nullable or removed
+    }
+    
+    try {
+      await db.$executeRawUnsafe(`ALTER TABLE "File" ADD COLUMN IF NOT EXISTS "r2Key" TEXT NOT NULL DEFAULT ''`);
+    } catch {
+      // Column might already exist
+    }
+
+    return NextResponse.json({ status: 'ok', message: 'Base de datos actualizada.' });
   } catch {
     try {
       const statements = [
@@ -21,7 +35,7 @@ export async function GET() {
           "originalName" TEXT NOT NULL,
           "mimeType" TEXT NOT NULL,
           "size" INTEGER NOT NULL,
-          "data" BYTEA NOT NULL,
+          "r2Key" TEXT NOT NULL DEFAULT '',
           "shareId" TEXT NOT NULL,
           "downloads" INTEGER NOT NULL DEFAULT 0,
           "userId" TEXT NOT NULL,
