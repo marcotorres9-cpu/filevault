@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { deleteFromR2 } from '@/lib/r2';
+import { verifyToken } from '@/lib/auth';
 
 // GET: Public — anyone can see all files
 export async function GET() {
@@ -20,7 +21,7 @@ export async function GET() {
   }
 }
 
-// POST: delete with action=delete&id=xxx
+// POST: delete with action=delete&id=xxx&token=xxx (WebView-safe, no cookies needed)
 export async function POST(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -28,8 +29,31 @@ export async function POST(request: NextRequest) {
 
     if (action === 'delete') {
       const fileId = searchParams.get('id');
+      const token = searchParams.get('token');
+
       if (!fileId) {
         return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+      }
+
+      // Verify auth: token from query param (most reliable) or from cookie
+      let isAuthenticated = false;
+      if (token) {
+        const payload = await verifyToken(token);
+        if (payload) isAuthenticated = true;
+      }
+      if (!isAuthenticated) {
+        // Fallback: check cookie
+        const { cookies } = await import('next/headers');
+        const cookieStore = await cookies();
+        const cookieToken = cookieStore.get('token')?.value || cookieStore.get('fv_token')?.value;
+        if (cookieToken) {
+          const payload = await verifyToken(cookieToken);
+          if (payload) isAuthenticated = true;
+        }
+      }
+
+      if (!isAuthenticated) {
+        return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
       }
 
       const file = await db.file.findUnique({ where: { id: fileId } });
@@ -49,22 +73,32 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: no auth required — delete by id
+// DELETE: fallback for any client that uses DELETE method
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const fileId = searchParams.get('id');
+
     if (!fileId) {
-      return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+      // Try reading from body as fallback
+      let bodyId = null;
+      try {
+        const body = await request.json();
+        bodyId = body.id;
+      } catch {}
+      if (!bodyId) {
+        return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+      }
     }
 
-    const file = await db.file.findUnique({ where: { id: fileId } });
+    const idToDelete = fileId || bodyId;
+    const file = await db.file.findUnique({ where: { id: idToDelete! } });
     if (!file) {
       return NextResponse.json({ error: 'No encontrado.' }, { status: 404 });
     }
 
     try { await deleteFromR2(file.r2Key); } catch (e) { console.error('R2:', e); }
-    await db.file.delete({ where: { id: fileId } });
+    await db.file.delete({ where: { id: idToDelete! } });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('DELETE error:', error);

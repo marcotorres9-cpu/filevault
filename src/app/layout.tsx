@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "FileVault - Alojamiento de Archivos",
-  description: "Sube, comparte y descarga archivos de forma rápida y sencilla. Tu plataforma de alojamiento personal.",
+  description: "Sube, comparte y descarga archivos de forma rapida y sencilla. Tu plataforma de alojamiento personal.",
   manifest: "/manifest.json",
   icons: {
     icon: "/icon-192.png",
@@ -33,6 +33,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
+      <head>
+        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0" />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
