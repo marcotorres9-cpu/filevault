@@ -1,0 +1,558 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useCallback, useRef } from 'react';
+     4→import { motion, AnimatePresence } from 'framer-motion';
+     5→import {
+     6→  Upload, Download, Trash2, Copy, LogOut, CloudUpload, FileText, FileImage,
+     7→  FileVideo, FileAudio, Archive, File, Link2, Check, Shield, Zap, FolderOpen,
+     8→  Eye, EyeOff, HardDrive, X, Loader2, Cloud, Lock, User,
+     9→} from 'lucide-react';
+    10→import { Button } from '@/components/ui/button';
+    11→import { Input } from '@/components/ui/input';
+    12→import { Label } from '@/components/ui/label';
+    13→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+    14→import { Badge } from '@/components/ui/badge';
+    15→import { Separator } from '@/components/ui/separator';
+    16→import { Progress } from '@/components/ui/progress';
+    17→import {
+    18→  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
+    19→} from '@/components/ui/dialog';
+    20→import {
+    21→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    22→  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    23→} from '@/components/ui/alert-dialog';
+    24→import { useToast } from '@/hooks/use-toast';
+    25→
+    26→/* ──────────── Types ──────────── */
+    27→interface User {
+    28→  id: string;
+    29→  username: string;
+    30→  createdAt: string;
+    31→}
+    32→
+    33→interface FileItem {
+    34→  id: string;
+    35→  originalName: string;
+    36→  mimeType: string;
+    37→  size: number;
+    38→  shareId: string;
+    39→  downloads: number;
+    40→  createdAt: string;
+    41→  user?: { username: string };
+    42→}
+    43→
+    44→/* ──────────── Helpers ──────────── */
+    45→function formatBytes(bytes: number): string {
+    46→  if (bytes === 0) return '0 B';
+    47→  const k = 1024;
+    48→  const sizes = ['B', 'KB', 'MB', 'GB'];
+    49→  const i = Math.floor(Math.log(bytes) / Math.log(k));
+    50→  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    51→}
+    52→
+    53→function formatDate(dateStr: string): string {
+    54→  return new Date(dateStr).toLocaleDateString('es-ES', {
+    55→    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    56→  });
+    57→}
+    58→
+    59→function getFileIcon(mimeType: string) {
+    60→  if (mimeType.startsWith('image/')) return <FileImage className="h-8 w-8 text-emerald-500" />;
+    61→  if (mimeType.startsWith('video/')) return <FileVideo className="h-8 w-8 text-violet-500" />;
+    62→  if (mimeType.startsWith('audio/')) return <FileAudio className="h-8 w-8 text-amber-500" />;
+    63→  if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('tar') || mimeType.includes('gz'))
+    64→    return <Archive className="h-8 w-8 text-orange-500" />;
+    65→  if (mimeType.includes('pdf')) return <FileText className="h-8 w-8 text-red-500" />;
+    66→  if (mimeType.includes('text') || mimeType.includes('json') || mimeType.includes('xml'))
+    67→    return <FileText className="h-8 w-8 text-sky-500" />;
+    68→  return <File className="h-8 w-8 text-muted-foreground" />;
+    69→}
+    70→
+    71→function getFileExtension(name: string): string {
+    72→  const parts = name.split('.');
+    73→  return parts.length > 1 ? parts.pop()!.toUpperCase() : 'N/A';
+    74→}
+    75→
+    76→function getShareUrl(shareId: string): string {
+    77→  if (typeof window !== 'undefined') {
+    78→    return `${window.location.origin}/api/download/${shareId}`;
+    79→  }
+    80→  return `/api/download/${shareId}`;
+    81→}
+    82→
+    83→/* ──────────── Login Dialog ──────────── */
+    84→function LoginDialog({
+    85→  user, onLogin, onLogout,
+    86→}: {
+    87→  user: User | null;
+    88→  onLogin: (user: User) => void;
+    89→  onLogout: () => void;
+    90→}) {
+    91→  const [open, setOpen] = useState(false);
+    92→  const [isRegister, setIsRegister] = useState(false);
+    93→  const [username, setUsername] = useState('');
+    94→  const [password, setPassword] = useState('');
+    95→  const [confirmPassword, setConfirmPassword] = useState('');
+    96→  const [showPassword, setShowPassword] = useState(false);
+    97→  const [showConfirm, setShowConfirm] = useState(false);
+    98→  const [loading, setLoading] = useState(false);
+    99→  const [error, setError] = useState('');
+   100→  const { toast } = useToast();
+   101→
+   102→  const resetAndClose = () => {
+   103→    setOpen(false);
+   104→    setError('');
+   105→    setUsername('');
+   106→    setPassword('');
+   107→    setConfirmPassword('');
+   108→  };
+   109→
+   110→  const handleSubmit = async (e: React.FormEvent) => {
+   111→    e.preventDefault();
+   112→    setError('');
+   113→    if (isRegister && password !== confirmPassword) { setError('Las contraseñas no coinciden.'); return; }
+   114→    if (isRegister && password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres.'); return; }
+   115→    if (isRegister && (username.length < 3 || username.length > 30)) { setError('El usuario debe tener entre 3 y 30 caracteres.'); return; }
+   116→
+   117→    setLoading(true);
+   118→    try {
+   119→      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+   120→      const res = await fetch(endpoint, {
+   121→        method: 'POST',
+   122→        headers: { 'Content-Type': 'application/json' },
+   123→        body: JSON.stringify({ username, password }),
+   124→      });
+   125→      const data = await res.json();
+   126→      if (!res.ok) { setError(data.error || 'Error en la autenticación.'); setLoading(false); return; }
+   127→      toast({ title: isRegister ? 'Cuenta creada' : 'Sesión iniciada', description: isRegister ? 'Tu cuenta ha sido creada.' : `Hola, ${data.user.username}` });
+   128→      onLogin(data.user);
+   129→      resetAndClose();
+   130→    } catch { setError('Error de conexión.'); }
+   131→    finally { setLoading(false); }
+   132→  };
+   133→
+   134→  const handleLogout = async () => {
+   135→    await fetch('/api/auth/me', { method: 'POST' });
+   136→    toast({ title: 'Sesión cerrada' });
+   137→    onLogout();
+   138→  };
+   139→
+   140→  // Logged in — show user badge + logout
+   141→  if (user) {
+   142→    return (
+   143→      <div className="flex items-center gap-2">
+   144→        <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 rounded-full text-sm font-medium">
+   145→          <div className="w-6 h-6 bg-emerald-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+   146→            {user.username[0].toUpperCase()}
+   147→          </div>
+   148→          <span className="hidden sm:inline">{user.username}</span>
+   149→        </div>
+   150→        <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-destructive h-9 w-9">
+   151→          <LogOut className="h-4 w-4" />
+   152→        </Button>
+   153→      </div>
+   154→    );
+   155→  }
+   156→
+   157→  // Not logged in — show admin button
+   158→  return (
+   159→    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setError(''); }}>
+   160→      <DialogTrigger asChild>
+   161→        <Button variant="outline" size="sm" className="gap-1.5 h-9">
+   162→          <Lock className="h-3.5 w-3.5" />
+   163→          <span className="hidden sm:inline">Admin</span>
+   164→        </Button>
+   165→      </DialogTrigger>
+   166→      <DialogContent className="sm:max-w-md">
+   167→        <DialogHeader>
+   168→          <DialogTitle className="flex items-center gap-2">
+   169→            <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
+   170→              <Shield className="h-4 w-4 text-white" />
+   171→            </div>
+   172→            {isRegister ? 'Crear cuenta' : 'Acceso admin'}
+   173→          </DialogTitle>
+   174→          <DialogDescription>
+   175→            {isRegister ? 'Crea tu cuenta de administrador para subir archivos.' : 'Ingresa para subir y administrar archivos.'}
+   176→          </DialogDescription>
+   177→        </DialogHeader>
+   178→        <form onSubmit={handleSubmit} className="space-y-4">
+   179→          {error && (
+   180→            <div className="p-3 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400">
+   181→              {error}
+   182→            </div>
+   183→          )}
+   184→          <div className="space-y-2">
+   185→            <Label htmlFor="username">Usuario</Label>
+   186→            <div className="relative">
+   187→              <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   188→              <Input id="username" placeholder="tu_usuario" value={username} onChange={(e) => setUsername(e.target.value)}
+   189→                required autoComplete="username" className="h-11 pl-10" disabled={loading} />
+   190→            </div>
+   191→          </div>
+   192→          <div className="space-y-2">
+   193→            <Label htmlFor="password">Contraseña</Label>
+   194→            <div className="relative">
+   195→              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   196→              <Input id="password" type={showPassword ? 'text' : 'password'} placeholder="••••••••"
+   197→                value={password} onChange={(e) => setPassword(e.target.value)}
+   198→                required autoComplete={isRegister ? 'new-password' : 'current-password'}
+   199→                className="h-11 pl-10 pr-10" disabled={loading} />
+   200→              <button type="button" onClick={() => setShowPassword(!showPassword)}
+   201→                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   202→                tabIndex={-1}>
+   203→                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+   204→              </button>
+   205→            </div>
+   206→          </div>
+   207→          {isRegister && (
+   208→            <div className="space-y-2">
+   209→              <Label htmlFor="confirm">Confirmar contraseña</Label>
+   210→              <div className="relative">
+   211→                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   212→                <Input id="confirm" type={showConfirm ? 'text' : 'password'} placeholder="••••••••"
+   213→                  value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+   214→                  required autoComplete="new-password" className="h-11 pl-10 pr-10" disabled={loading} />
+   215→                <button type="button" onClick={() => setShowConfirm(!showConfirm)}
+   216→                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+   217→                  tabIndex={-1}>
+   218→                  {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+   219→                </button>
+   220→              </div>
+   221→            </div>
+   222→          )}
+   223→          <Button type="submit" className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-medium" disabled={loading}>
+   224→            {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+   225→            {isRegister ? 'Crear cuenta' : 'Iniciar sesión'}
+   226→          </Button>
+   227→          <div className="text-center">
+   228→            <button type="button" onClick={() => { setIsRegister(!isRegister); setError(''); }}
+   229→              className="text-sm text-muted-foreground hover:text-foreground transition-colors" disabled={loading}>
+   230→              {isRegister ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
+   231→            </button>
+   232→          </div>
+   233→        </form>
+   234→      </DialogContent>
+   235→    </Dialog>
+   236→  );
+   237→}
+   238→
+   239→/* ──────────── Upload Dialog ──────────── */
+   240→function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
+   241→  const [files, setFiles] = useState<File[]>([]);
+   242→  const [uploading, setUploading] = useState(false);
+   243→  const [progress, setProgress] = useState(0);
+   244→  const [dragActive, setDragActive] = useState(false);
+   245→  const fileInputRef = useRef<HTMLInputElement>(null);
+   246→  const { toast } = useToast();
+   247→
+   248→  const handleFiles = (fileList: FileList | null) => { if (!fileList) return; setFiles((prev) => [...prev, ...Array.from(fileList)]); };
+   249→  const handleDrop = useCallback((e: React.DragEvent) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); }, []);
+   250→  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragActive(true); };
+   251→  const handleDragLeave = () => setDragActive(false);
+   252→  const removeFile = (index: number) => { setFiles((prev) => prev.filter((_, i) => i !== index)); };
+   253→
+   254→  const upload = async () => {
+   255→    if (files.length === 0) return;
+   256→    setUploading(true); setProgress(0);
+   257→    let success = 0; let failed = 0;
+   258→    for (let i = 0; i < files.length; i++) {
+   259→      const file = files[i];
+   260→      try {
+   261→        const presignRes = await fetch('/api/files/presign', {
+   262→          method: 'POST', headers: { 'Content-Type': 'application/json' },
+   263→          body: JSON.stringify({ fileName: file.name, fileSize: file.size, mimeType: file.type || 'application/octet-stream' }),
+   264→        });
+   265→        if (!presignRes.ok) { failed++; setProgress(Math.round(((i + 1) / files.length) * 100)); continue; }
+   266→        const { uploadUrl, r2Key } = await presignRes.json();
+   267→        const uploadRes = await fetch(uploadUrl, {
+   268→          method: 'PUT', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' },
+   269→        });
+   270→        if (!uploadRes.ok) { failed++; setProgress(Math.round(((i + 1) / files.length) * 100)); continue; }
+   271→        const confirmRes = await fetch('/api/files/confirm', {
+   272→          method: 'POST', headers: { 'Content-Type': 'application/json' },
+   273→          body: JSON.stringify({ r2Key, originalName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size }),
+   274→        });
+   275→        if (confirmRes.ok) success++; else failed++;
+   276→      } catch { failed++; }
+   277→      setProgress(Math.round(((i + 1) / files.length) * 100));
+   278→    }
+   279→    setUploading(false); setFiles([]);
+   280→    if (success > 0) {
+   281→      toast({ title: `${success} archivo${success > 1 ? 's' : ''} subido${success > 1 ? 's' : ''}`, description: failed > 0 ? `${failed} archivo${failed > 1 ? 's' : ''} falló.` : 'Todos los archivos se subieron correctamente.' });
+   282→      onUploaded();
+   283→    }
+   284→    if (failed > 0 && success === 0) toast({ title: 'Error', description: 'No se pudieron subir los archivos.', variant: 'destructive' });
+   285→  };
+   286→
+   287→  return (
+   288→    <Dialog>
+   289→      <DialogTrigger asChild>
+   290→        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium h-11 gap-2">
+   291→          <Upload className="h-4 w-4" />Subir archivos
+   292→        </Button>
+   293→      </DialogTrigger>
+   294→      <DialogContent className="sm:max-w-lg">
+   295→        <DialogHeader>
+   296→          <DialogTitle>Subir archivos</DialogTitle>
+   297→          <DialogDescription>Arrastra archivos aquí o haz clic para seleccionar. Máximo 5GB por archivo.</DialogDescription>
+   298→        </DialogHeader>
+   299→        <div
+   300→          className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${dragActive ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30' : 'border-muted-foreground/25 hover:border-emerald-400 hover:bg-muted/50'}`}
+   301→          onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
+   302→          onClick={() => fileInputRef.current?.click()}>
+   303→          <CloudUpload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+   304→          <p className="text-sm font-medium">Arrastra archivos aquí</p>
+   305→          <p className="text-xs text-muted-foreground mt-1">o haz clic para seleccionar</p>
+   306→          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+   307→        </div>
+   308→        {files.length > 0 && (
+   309→          <div className="space-y-2 max-h-48 overflow-y-auto">
+   310→            {files.map((f, i) => (
+   311→              <div key={`${f.name}-${i}`} className="flex items-center gap-3 p-2 rounded-lg bg-muted/50">
+   312→                {getFileIcon(f.type)}
+   313→                <div className="flex-1 min-w-0">
+   314→                  <p className="text-sm font-medium truncate">{f.name}</p>
+   315→                  <p className="text-xs text-muted-foreground">{formatBytes(f.size)}</p>
+   316→                </div>
+   317→                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={(e) => { e.stopPropagation(); removeFile(i); }} disabled={uploading}>
+   318→                  <X className="h-4 w-4" />
+   319→                </Button>
+   320→              </div>
+   321→            ))}
+   322→          </div>
+   323→        )}
+   324→        {uploading && (
+   325→          <div className="space-y-2">
+   326→            <Progress value={progress} className="h-2" />
+   327→            <p className="text-xs text-center text-muted-foreground">{progress}% completado</p>
+   328→          </div>
+   329→        )}
+   330→        <div className="flex justify-end gap-2">
+   331→          <Button variant="outline" onClick={() => setFiles([])} disabled={uploading || files.length === 0}>Limpiar</Button>
+   332→          <Button onClick={upload} disabled={uploading || files.length === 0} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+   333→            {uploading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Subiendo...</> : <><Upload className="h-4 w-4 mr-2" />Subir {files.length > 0 ? `(${files.length})` : ''}</>}
+   334→          </Button>
+   335→        </div>
+   336→      </DialogContent>
+   337→    </Dialog>
+   338→  );
+   339→}
+   340→
+   341→/* ──────────── File Card ──────────── */
+   342→function FileCard({ file, isAdmin, onDelete }: { file: FileItem; isAdmin: boolean; onDelete: (id: string) => void }) {
+   343→  const [copied, setCopied] = useState(false);
+   344→  const [deleting, setDeleting] = useState(false);
+   345→  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+   346→  const { toast } = useToast();
+   347→  const shareUrl = getShareUrl(file.shareId);
+   348→
+   349→  const copyLink = async () => {
+   350→    try {
+   351→      await navigator.clipboard.writeText(shareUrl);
+   352→      setCopied(true);
+   353→      toast({ title: 'Enlace copiado', description: 'El enlace de descarga está en tu portapapeles.' });
+   354→      setTimeout(() => setCopied(false), 2000);
+   355→    } catch { toast({ title: 'Error', description: 'No se pudo copiar el enlace.', variant: 'destructive' }); }
+   356→  };
+   357→
+   358→  const handleDelete = async () => {
+   359→    setDeleting(true);
+   360→    try {
+   361→      const res = await fetch(`/api/files?id=${file.id}`, { method: 'DELETE' });
+   362→      if (res.ok) { toast({ title: 'Eliminado', description: 'El archivo ha sido eliminado.' }); onDelete(file.id); }
+   363→      else toast({ title: 'Error', description: 'No se pudo eliminar.', variant: 'destructive' });
+   364→    } catch { toast({ title: 'Error', description: 'Error de conexión.', variant: 'destructive' }); }
+   365→    finally { setDeleting(false); setShowDeleteDialog(false); }
+   366→  };
+   367→
+   368→  return (
+   369→    <>
+   370→      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} layout className="group">
+   371→        <Card className="hover:shadow-md transition-shadow border-border/60">
+   372→          <CardContent className="p-4">
+   373→            <div className="flex items-start gap-3">
+   374→              <div className="shrink-0 mt-0.5">{getFileIcon(file.mimeType)}</div>
+   375→              <div className="flex-1 min-w-0">
+   376→                <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+   377→                <div className="flex items-center gap-2 mt-1 flex-wrap">
+   378→                  <Badge variant="secondary" className="text-xs font-normal">{getFileExtension(file.originalName)}</Badge>
+   379→                  <span className="text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+   380→                  <span className="text-xs text-muted-foreground">•</span>
+   381→                  <span className="text-xs text-muted-foreground">{formatDate(file.createdAt)}</span>
+   382→                </div>
+   383→                <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
+   384→                  <span className="flex items-center gap-1"><Eye className="h-3 w-3" />{file.downloads} descarga{file.downloads !== 1 ? 's' : ''}</span>
+   385→                  {file.user && <span className="flex items-center gap-1"><User className="h-3 w-3" />{file.user.username}</span>}
+   386→                </div>
+   387→              </div>
+   388→            </div>
+   389→            <Separator className="my-3" />
+   390→            <div className="flex items-center gap-2">
+   391→              <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-1.5"
+   392→                onClick={() => window.open(`/api/files/${file.id}/download`, '_blank')}>
+   393→                <Download className="h-3.5 w-3.5" />Descargar
+   394→              </Button>
+   395→              <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-1.5" onClick={copyLink}>
+   396→                {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+   397→                {copied ? 'Copiado' : 'Copiar enlace'}
+   398→              </Button>
+   399→              {isAdmin && (
+   400→                <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+   401→                  onClick={() => setShowDeleteDialog(true)} disabled={deleting}>
+   402→                  {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+   403→                </Button>
+   404→              )}
+   405→            </div>
+   406→          </CardContent>
+   407→        </Card>
+   408→      </motion.div>
+   409→      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+   410→        <AlertDialogContent>
+   411→          <AlertDialogHeader>
+   412→            <AlertDialogTitle>¿Eliminar archivo?</AlertDialogTitle>
+   413→            <AlertDialogDescription>Vas a eliminar &quot;{file.originalName}&quot;. Esta acción no se puede deshacer.</AlertDialogDescription>
+   414→          </AlertDialogHeader>
+   415→          <AlertDialogFooter>
+   416→            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+   417→            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-white hover:bg-destructive/90">Eliminar</AlertDialogAction>
+   418→          </AlertDialogFooter>
+   419→        </AlertDialogContent>
+   420→      </AlertDialog>
+   421→    </>
+   422→  );
+   423→}
+   424→
+   425→/* ──────────── Main Page (Public) ──────────── */
+   426→export default function HomePage() {
+   427→  const [user, setUser] = useState<User | null>(null);
+   428→  const [files, setFiles] = useState<FileItem[]>([]);
+   429→  const [loading, setLoading] = useState(true);
+   430→  const [searchTerm, setSearchTerm] = useState('');
+   431→  const [stats, setStats] = useState({ totalFiles: 0, totalSize: 0, totalDownloads: 0 });
+   432→  const { toast } = useToast();
+   433→
+   434→  const loadFiles = useCallback(async () => {
+   435→    try {
+   436→      const res = await fetch('/api/files');
+   437→      if (res.ok) {
+   438→        const data = await res.json();
+   439→        setFiles(data.files);
+   440→        setStats({
+   441→          totalFiles: data.files.length,
+   442→          totalSize: data.files.reduce((acc: number, f: FileItem) => acc + f.size, 0),
+   443→          totalDownloads: data.files.reduce((acc: number, f: FileItem) => acc + f.downloads, 0),
+   444→        });
+   445→      }
+   446→    } catch { toast({ title: 'Error', description: 'No se pudieron cargar los archivos.', variant: 'destructive' }); }
+   447→    finally { setLoading(false); }
+   448→  }, [toast]);
+   449→
+   450→  useEffect(() => {
+   451→    loadFiles();
+   452→    // Check session silently
+   453→    fetch('/api/auth/me')
+   454→      .then((res) => { if (res.ok) return res.json(); throw new Error(); })
+   455→      .then((data) => setUser(data.user))
+   456→      .catch(() => {});
+   457→  }, [loadFiles]);
+   458→
+   459→  const handleLogin = (loggedInUser: User) => setUser(loggedInUser);
+   460→  const handleLogout = () => setUser(null);
+   461→  const handleDeleteFile = (id: string) => { setFiles((prev) => prev.filter((f) => f.id !== id)); loadFiles(); };
+   462→  const filteredFiles = files.filter((f) => f.originalName.toLowerCase().includes(searchTerm.toLowerCase()));
+   463→
+   464→  return (
+   465→    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-emerald-50/30 dark:from-gray-950 dark:to-gray-900">
+   466→      {/* Header */}
+   467→      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-lg border-b">
+   468→        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+   469→          <div className="flex items-center gap-3">
+   470→            <div className="flex items-center justify-center w-9 h-9 bg-emerald-600 rounded-xl">
+   471→              <Cloud className="h-5 w-5 text-white" />
+   472→            </div>
+   473→            <h1 className="text-lg font-bold tracking-tight">FileVault</h1>
+   474→          </div>
+   475→          <div className="flex items-center gap-2">
+   476→            {user && <UploadDialog onUploaded={loadFiles} />}
+   477→            <LoginDialog user={user} onLogin={handleLogin} onLogout={handleLogout} />
+   478→          </div>
+   479→        </div>
+   480→      </header>
+   481→
+   482→      {/* Main Content */}
+   483→      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-8">
+   484→        {/* Stats */}
+   485→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
+   486→          {[
+   487→            { label: 'Archivos', value: stats.totalFiles, icon: FolderOpen, color: 'text-emerald-600' },
+   488→            { label: 'Almacenado', value: formatBytes(stats.totalSize), icon: HardDrive, color: 'text-sky-600' },
+   489→            { label: 'Descargas', value: stats.totalDownloads, icon: Download, color: 'text-violet-600' },
+   490→            { label: 'Enlaces activos', value: stats.totalFiles, icon: Link2, color: 'text-amber-600' },
+   491→          ].map((stat) => (
+   492→            <Card key={stat.label} className="border-border/60">
+   493→              <CardContent className="p-4">
+   494→                <div className="flex items-center gap-2 mb-1">
+   495→                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
+   496→                  <span className="text-xs text-muted-foreground font-medium">{stat.label}</span>
+   497→                </div>
+   498→                <p className="text-xl sm:text-2xl font-bold">{stat.value}</p>
+   499→              </CardContent>
+   500→            </Card>
+   501→          ))}
+   502→        </div>
+   503→
+   504→        {/* Files Header */}
+   505→        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+   506→          <h2 className="text-lg font-semibold">Archivos</h2>
+   507→          <Input placeholder="Buscar archivos..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+   508→            className="h-10 w-full sm:w-64" />
+   509→        </div>
+   510→
+   511→        {/* File Grid */}
+   512→        {loading ? (
+   513→          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   514→            {[1, 2, 3, 4, 5, 6].map((i) => (
+   515→              <Card key={i} className="border-border/60">
+   516→                <CardContent className="p-4">
+   517→                  <div className="flex items-center gap-3">
+   518→                    <div className="w-8 h-8 bg-muted rounded-lg animate-pulse" />
+   519→                    <div className="flex-1 space-y-2">
+   520→                      <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
+   521→                      <div className="h-3 bg-muted rounded animate-pulse w-1/2" />
+   522→                    </div>
+   523→                  </div>
+   524→                </CardContent>
+   525→              </Card>
+   526→            ))}
+   527→          </div>
+   528→        ) : filteredFiles.length === 0 ? (
+   529→          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-16">
+   530→            <div className="inline-flex items-center justify-center w-16 h-16 bg-muted rounded-2xl mb-4">
+   531→              <FolderOpen className="h-8 w-8 text-muted-foreground" />
+   532→            </div>
+   533→            <h3 className="text-lg font-semibold mb-1">{searchTerm ? 'Sin resultados' : 'No hay archivos aún'}</h3>
+   534→            <p className="text-sm text-muted-foreground mb-4">
+   535→              {searchTerm ? `No se encontraron archivos que coincidan con "${searchTerm}".` : 'Aún no se han subido archivos.'}
+   536→            </p>
+   537→          </motion.div>
+   538→        ) : (
+   539→          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   540→            <AnimatePresence mode="popLayout">
+   541→              {filteredFiles.map((file) => (
+   542→                <FileCard key={file.id} file={file} isAdmin={!!user} onDelete={handleDeleteFile} />
+   543→              ))}
+   544→            </AnimatePresence>
+   545→          </div>
+   546→        )}
+   547→      </main>
+   548→
+   549→      {/* Footer */}
+   550→      <footer className="mt-auto border-t bg-background/60 backdrop-blur-sm">
+   551→        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+   552→          <span>FileVault — Tu almacenamiento en la nube personal</span>
+   553→          <span>Powered by Next.js</span>
+   554→        </div>
+   555→      </footer>
+   556→    </div>
+   557→  );
+   558→}

@@ -1,0 +1,915 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { useState, useEffect, useCallback, useRef } from 'react';
+     4→     4→import { motion, AnimatePresence } from 'framer-motion';
+     5→     5→import {
+     6→     6→  Upload,
+     7→     7→  Download,
+     8→     8→  Trash2,
+     9→     9→  Copy,
+    10→    10→  LogOut,
+    11→    11→  CloudUpload,
+    12→    12→  FileText,
+    13→    13→  FileImage,
+    14→    14→  FileVideo,
+    15→    15→  FileAudio,
+    16→    16→  Archive,
+    17→    17→  File,
+    18→    18→  Link2,
+    19→    19→  Check,
+    20→    20→  Shield,
+    21→    21→  Zap,
+    22→    22→  FolderOpen,
+    23→    23→  Eye,
+    24→    24→  HardDrive,
+    25→    25→  X,
+    26→    26→  Loader2,
+    27→    27→  Cloud,
+    28→    28→} from 'lucide-react';
+    29→    29→import { Button } from '@/components/ui/button';
+    30→    30→import { Input } from '@/components/ui/input';
+    31→    31→import { Label } from '@/components/ui/label';
+    32→    32→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+    33→    33→import { Badge } from '@/components/ui/badge';
+    34→    34→import { Separator } from '@/components/ui/separator';
+    35→    35→import { Progress } from '@/components/ui/progress';
+    36→    36→import {
+    37→    37→  Dialog,
+    38→    38→  DialogContent,
+    39→    39→  DialogDescription,
+    40→    40→  DialogHeader,
+    41→    41→  DialogTitle,
+    42→    42→  DialogTrigger,
+    43→    43→} from '@/components/ui/dialog';
+    44→    44→import {
+    45→    45→  AlertDialog,
+    46→    46→  AlertDialogAction,
+    47→    47→  AlertDialogCancel,
+    48→    48→  AlertDialogContent,
+    49→    49→  AlertDialogDescription,
+    50→    50→  AlertDialogFooter,
+    51→    51→  AlertDialogHeader,
+    52→    52→  AlertDialogTitle,
+    53→    53→} from '@/components/ui/alert-dialog';
+    54→    54→import { useToast } from '@/hooks/use-toast';
+    55→    55→
+    56→    56→/* ──────────── Types ──────────── */
+    57→    57→interface User {
+    58→    58→  id: string;
+    59→    59→  username: string;
+    60→    60→  createdAt: string;
+    61→    61→  fileCount?: number;
+    62→    62→}
+    63→    63→
+    64→    64→interface FileItem {
+    65→    65→  id: string;
+    66→    66→  originalName: string;
+    67→    67→  mimeType: string;
+    68→    68→  size: number;
+    69→    69→  shareId: string;
+    70→    70→  downloads: number;
+    71→    71→  createdAt: string;
+    72→    72→}
+    73→    73→
+    74→    74→type View = 'auth' | 'dashboard';
+    75→    75→
+    76→    76→/* ──────────── Helpers ──────────── */
+    77→    77→function formatBytes(bytes: number): string {
+    78→    78→  if (bytes === 0) return '0 B';
+    79→    79→  const k = 1024;
+    80→    80→  const sizes = ['B', 'KB', 'MB', 'GB'];
+    81→    81→  const i = Math.floor(Math.log(bytes) / Math.log(k));
+    82→    82→  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    83→    83→}
+    84→    84→
+    85→    85→function formatDate(dateStr: string): string {
+    86→    86→  return new Date(dateStr).toLocaleDateString('es-ES', {
+    87→    87→    day: 'numeric',
+    88→    88→    month: 'short',
+    89→    89→    year: 'numeric',
+    90→    90→    hour: '2-digit',
+    91→    91→    minute: '2-digit',
+    92→    92→  });
+    93→    93→}
+    94→    94→
+    95→    95→function getFileIcon(mimeType: string) {
+    96→    96→  if (mimeType.startsWith('image/')) return <FileImage className="h-8 w-8 text-emerald-500" />;
+    97→    97→  if (mimeType.startsWith('video/')) return <FileVideo className="h-8 w-8 text-violet-500" />;
+    98→    98→  if (mimeType.startsWith('audio/')) return <FileAudio className="h-8 w-8 text-amber-500" />;
+    99→    99→  if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('tar') || mimeType.includes('gz'))
+   100→   100→    return <Archive className="h-8 w-8 text-orange-500" />;
+   101→   101→  if (mimeType.includes('pdf')) return <FileText className="h-8 w-8 text-red-500" />;
+   102→   102→  if (mimeType.includes('text') || mimeType.includes('json') || mimeType.includes('xml'))
+   103→   103→    return <FileText className="h-8 w-8 text-sky-500" />;
+   104→   104→  return <File className="h-8 w-8 text-muted-foreground" />;
+   105→   105→}
+   106→   106→
+   107→   107→function getFileExtension(name: string): string {
+   108→   108→  const parts = name.split('.');
+   109→   109→  return parts.length > 1 ? parts.pop()!.toUpperCase() : 'N/A';
+   110→   110→}
+   111→   111→
+   112→   112→function getShareUrl(shareId: string): string {
+   113→   113→  if (typeof window !== 'undefined') {
+   114→   114→    return `${window.location.origin}/api/download/${shareId}`;
+   115→   115→  }
+   116→   116→  return `/api/download/${shareId}`;
+   117→   117→}
+   118→   118→
+   119→   119→/* ──────────── Auth Component ──────────── */
+   120→   120→function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
+   121→   121→  const [isRegister, setIsRegister] = useState(false);
+   122→   122→  const [username, setUsername] = useState('');
+   123→   123→  const [password, setPassword] = useState('');
+   124→   124→  const [confirmPassword, setConfirmPassword] = useState('');
+   125→   125→  const [loading, setLoading] = useState(false);
+   126→   126→  const [error, setError] = useState('');
+   127→   127→  const { toast } = useToast();
+   128→   128→
+   129→   129→  const handleSubmit = async (e: React.FormEvent) => {
+   130→   130→    e.preventDefault();
+   131→   131→    setError('');
+   132→   132→
+   133→   133→    if (isRegister && password !== confirmPassword) {
+   134→   134→      setError('Las contraseñas no coinciden.');
+   135→   135→      return;
+   136→   136→    }
+   137→   137→
+   138→   138→    if (isRegister && password.length < 6) {
+   139→   139→      setError('La contraseña debe tener al menos 6 caracteres.');
+   140→   140→      return;
+   141→   141→    }
+   142→   142→
+   143→   143→    if (isRegister && (username.length < 3 || username.length > 30)) {
+   144→   144→      setError('El usuario debe tener entre 3 y 30 caracteres.');
+   145→   145→      return;
+   146→   146→    }
+   147→   147→
+   148→   148→    setLoading(true);
+   149→   149→    try {
+   150→   150→      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+   151→   151→      const res = await fetch(endpoint, {
+   152→   152→        method: 'POST',
+   153→   153→        headers: { 'Content-Type': 'application/json' },
+   154→   154→        body: JSON.stringify({ username, password }),
+   155→   155→      });
+   156→   156→
+   157→   157→      const data = await res.json();
+   158→   158→
+   159→   159→      if (!res.ok) {
+   160→   160→        setError(data.error || 'Error en la autenticación.');
+   161→   161→        return;
+   162→   162→      }
+   163→   163→
+   164→   164→      toast({
+   165→   165→        title: isRegister ? 'Cuenta creada' : 'Bienvenido de vuelta',
+   166→   166→        description: isRegister ? 'Tu cuenta ha sido creada exitosamente.' : `Hola, ${data.user.username}`,
+   167→   167→      });
+   168→   168→
+   169→   169→      onLogin(data.user);
+   170→   170→    } catch {
+   171→   171→      setError('Error de conexión. Intenta de nuevo.');
+   172→   172→    } finally {
+   173→   173→      setLoading(false);
+   174→   174→    }
+   175→   175→  };
+   176→   176→
+   177→   177→  return (
+   178→   178→    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-4">
+   179→   179→      {/* Background decorations */}
+   180→   180→      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+   181→   181→        <div className="absolute -top-40 -right-40 w-80 h-80 bg-emerald-200/30 dark:bg-emerald-900/20 rounded-full blur-3xl" />
+   182→   182→        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-teal-200/30 dark:bg-teal-900/20 rounded-full blur-3xl" />
+   183→   183→      </div>
+   184→   184→
+   185→   185→      <motion.div
+   186→   186→        initial={{ opacity: 0, y: 20 }}
+   187→   187→        animate={{ opacity: 1, y: 0 }}
+   188→   188→        transition={{ duration: 0.5 }}
+   189→   189→        className="relative w-full max-w-md"
+   190→   190→      >
+   191→   191→        {/* Logo */}
+   192→   192→        <div className="text-center mb-8">
+   193→   193→          <motion.div
+   194→   194→            initial={{ scale: 0 }}
+   195→   195→            animate={{ scale: 1 }}
+   196→   196→            transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
+   197→   197→            className="inline-flex items-center justify-center w-16 h-16 bg-emerald-600 rounded-2xl mb-4 shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30"
+   198→   198→          >
+   199→   199→            <Cloud className="h-8 w-8 text-white" />
+   200→   200→          </motion.div>
+   201→   201→          <h1 className="text-3xl font-bold tracking-tight text-foreground">FileVault</h1>
+   202→   202→          <p className="text-muted-foreground mt-1">Tu plataforma de archivos personal</p>
+   203→   203→        </div>
+   204→   204→
+   205→   205→        <Card className="border-0 shadow-xl shadow-black/5 dark:shadow-black/20">
+   206→   206→          <CardHeader className="pb-4">
+   207→   207→            <CardTitle className="text-xl">
+   208→   208→              {isRegister ? 'Crear cuenta' : 'Iniciar sesión'}
+   209→   209→            </CardTitle>
+   210→   210→            <CardDescription>
+   211→   211→              {isRegister
+   212→   212→                ? 'Crea tu cuenta para empezar a subir archivos.'
+   213→   213→                : 'Ingresa tus credenciales para acceder.'}
+   214→   214→            </CardDescription>
+   215→   215→          </CardHeader>
+   216→   216→          <CardContent>
+   217→   217→            <form onSubmit={handleSubmit} className="space-y-4">
+   218→   218→              {error && (
+   219→   219→                <motion.div
+   220→   220→                  initial={{ opacity: 0, height: 0 }}
+   221→   221→                  animate={{ opacity: 1, height: 'auto' }}
+   222→   222→                  className="p-3 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400"
+   223→   223→                >
+   224→   224→                  {error}
+   225→   225→                </motion.div>
+   226→   226→              )}
+   227→   227→
+   228→   228→              <div className="space-y-2">
+   229→   229→                <Label htmlFor="username">Usuario</Label>
+   230→   230→                <Input
+   231→   231→                  id="username"
+   232→   232→                  placeholder="tu_usuario"
+   233→   233→                  value={username}
+   234→   234→                  onChange={(e) => setUsername(e.target.value)}
+   235→   235→                  required
+   236→   236→                  autoComplete="username"
+   237→   237→                  className="h-11"
+   238→   238→                  disabled={loading}
+   239→   239→                />
+   240→   240→              </div>
+   241→   241→
+   242→   242→              <div className="space-y-2">
+   243→   243→                <Label htmlFor="password">Contraseña</Label>
+   244→   244→                <Input
+   245→   245→                  id="password"
+   246→   246→                  type="password"
+   247→   247→                  placeholder="••••••••"
+   248→   248→                  value={password}
+   249→   249→                  onChange={(e) => setPassword(e.target.value)}
+   250→   250→                  required
+   251→   251→                  autoComplete={isRegister ? 'new-password' : 'current-password'}
+   252→   252→                  className="h-11"
+   253→   253→                  disabled={loading}
+   254→   254→                />
+   255→   255→              </div>
+   256→   256→
+   257→   257→              {isRegister && (
+   258→   258→                <motion.div
+   259→   259→                  initial={{ opacity: 0, height: 0 }}
+   260→   260→                  animate={{ opacity: 1, height: 'auto' }}
+   261→   261→                  exit={{ opacity: 0, height: 0 }}
+   262→   262→                  className="space-y-2"
+   263→   263→                >
+   264→   264→                  <Label htmlFor="confirm">Confirmar contraseña</Label>
+   265→   265→                  <Input
+   266→   266→                    id="confirm"
+   267→   267→                    type="password"
+   268→   268→                    placeholder="••••••••"
+   269→   269→                    value={confirmPassword}
+   270→   270→                    onChange={(e) => setConfirmPassword(e.target.value)}
+   271→   271→                    required
+   272→   272→                    autoComplete="new-password"
+   273→   273→                    className="h-11"
+   274→   274→                    disabled={loading}
+   275→   275→                  />
+   276→   276→                </motion.div>
+   277→   277→              )}
+   278→   278→
+   279→   279→              <Button
+   280→   280→                type="submit"
+   281→   281→                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
+   282→   282→                disabled={loading}
+   283→   283→              >
+   284→   284→                {loading ? (
+   285→   285→                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+   286→   286→                ) : isRegister ? (
+   287→   287→                  'Crear cuenta'
+   288→   288→                ) : (
+   289→   289→                  'Iniciar sesión'
+   290→   290→                )}
+   291→   291→              </Button>
+   292→   292→
+   293→   293→              <div className="text-center">
+   294→   294→                <button
+   295→   295→                  type="button"
+   296→   296→                  onClick={() => {
+   297→   297→                    setIsRegister(!isRegister);
+   298→   298→                    setError('');
+   299→   299→                  }}
+   300→   300→                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+   301→   301→                  disabled={loading}
+   302→   302→                >
+   303→   303→                  {isRegister ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
+   304→   304→                </button>
+   305→   305→              </div>
+   306→   306→            </form>
+   307→   307→          </CardContent>
+   308→   308→        </Card>
+   309→   309→
+   310→   310→        <div className="flex items-center justify-center gap-6 mt-8 text-xs text-muted-foreground">
+   311→   311→          <div className="flex items-center gap-1.5">
+   312→   312→            <Shield className="h-3.5 w-3.5" />
+   313→   313→            <span>Seguro</span>
+   314→   314→          </div>
+   315→   315→          <div className="flex items-center gap-1.5">
+   316→   316→            <Zap className="h-3.5 w-3.5" />
+   317→   317→            <span>Rápido</span>
+   318→   318→          </div>
+   319→   319→          <div className="flex items-center gap-1.5">
+   320→   320→            <Cloud className="h-3.5 w-3.5" />
+   321→   321→            <span>Gratis</span>
+   322→   322→          </div>
+   323→   323→        </div>
+   324→   324→      </motion.div>
+   325→   325→    </div>
+   326→   326→  );
+   327→   327→}
+   328→   328→
+   329→   329→/* ──────────── Upload Dialog ──────────── */
+   330→   330→function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
+   331→   331→  const [files, setFiles] = useState<File[]>([]);
+   332→   332→  const [uploading, setUploading] = useState(false);
+   333→   333→  const [progress, setProgress] = useState(0);
+   334→   334→  const [dragActive, setDragActive] = useState(false);
+   335→   335→  const fileInputRef = useRef<HTMLInputElement>(null);
+   336→   336→  const { toast } = useToast();
+   337→   337→
+   338→   338→  const handleFiles = (fileList: FileList | null) => {
+   339→   339→    if (!fileList) return;
+   340→   340→    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+   341→   341→  };
+   342→   342→
+   343→   343→  const handleDrop = useCallback((e: React.DragEvent) => {
+   344→   344→    e.preventDefault();
+   345→   345→    setDragActive(false);
+   346→   346→    handleFiles(e.dataTransfer.files);
+   347→   347→  }, []);
+   348→   348→
+   349→   349→  const handleDragOver = (e: React.DragEvent) => {
+   350→   350→    e.preventDefault();
+   351→   351→    setDragActive(true);
+   352→   352→  };
+   353→   353→
+   354→   354→  const handleDragLeave = () => setDragActive(false);
+   355→   355→
+   356→   356→  const removeFile = (index: number) => {
+   357→   357→    setFiles((prev) => prev.filter((_, i) => i !== index));
+   358→   358→  };
+   359→   359→
+   360→   360→  const upload = async () => {
+   361→   361→    if (files.length === 0) return;
+   362→   362→    setUploading(true);
+   363→   363→    setProgress(0);
+   364→   364→
+   365→   365→    let success = 0;
+   366→   366→    let failed = 0;
+   367→   367→
+   368→   368→    for (let i = 0; i < files.length; i++) {
+   369→   369→      const file = files[i];
+   370→   370→      try {
+   371→   371→        // Step 1: Get presigned URL from our API (small request, no file data)
+   372→   372→        const presignRes = await fetch('/api/files/presign', {
+   373→   373→          method: 'POST',
+   374→   374→          headers: { 'Content-Type': 'application/json' },
+   375→   375→          body: JSON.stringify({
+   376→   376→            fileName: file.name,
+   377→   377→            fileSize: file.size,
+   378→   378→            mimeType: file.type || 'application/octet-stream',
+   379→   379→          }),
+   380→   380→        });
+   381→   381→
+   382→   382→        if (!presignRes.ok) {
+   383→   383→          failed++;
+   384→   384→          setProgress(Math.round(((i + 1) / files.length) * 100));
+   385→   385→          continue;
+   386→   386→        }
+   387→   387→
+   388→   388→        const { uploadUrl, r2Key } = await presignRes.json();
+   389→   389→
+   390→   390→        // Step 2: Upload file DIRECTLY to R2 (bypasses Vercel 4.5MB limit)
+   391→   391→        const uploadRes = await fetch(uploadUrl, {
+   392→   392→          method: 'PUT',
+   393→   393→          body: file,
+   394→   394→          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+   395→   395→        });
+   396→   396→
+   397→   397→        if (!uploadRes.ok) {
+   398→   398→          failed++;
+   399→   399→          setProgress(Math.round(((i + 1) / files.length) * 100));
+   400→   400→          continue;
+   401→   401→        }
+   402→   402→
+   403→   403→        // Step 3: Confirm - save metadata to database
+   404→   404→        const confirmRes = await fetch('/api/files/confirm', {
+   405→   405→          method: 'POST',
+   406→   406→          headers: { 'Content-Type': 'application/json' },
+   407→   407→          body: JSON.stringify({
+   408→   408→            r2Key,
+   409→   409→            originalName: file.name,
+   410→   410→            mimeType: file.type || 'application/octet-stream',
+   411→   411→            size: file.size,
+   412→   412→          }),
+   413→   413→        });
+   414→   414→
+   415→   415→        if (confirmRes.ok) success++;
+   416→   416→        else failed++;
+   417→   417→      } catch {
+   418→   418→        failed++;
+   419→   419→      }
+   420→   420→      setProgress(Math.round(((i + 1) / files.length) * 100));
+   421→   421→    }
+   422→   422→
+   423→   423→    setUploading(false);
+   424→   424→    setFiles([]);
+   425→   425→
+   426→   426→    if (success > 0) {
+   427→   427→      toast({
+   428→   428→        title: `${success} archivo${success > 1 ? 's' : ''} subido${success > 1 ? 's' : ''}`,
+   429→   429→        description: failed > 0 ? `${failed} archivo${failed > 1 ? 's' : ''} falló.` : 'Todos los archivos se subieron correctamente.',
+   430→   430→        variant: failed > 0 ? 'default' : 'default',
+   431→   431→      });
+   432→   432→      onUploaded();
+   433→   433→    }
+   434→   434→
+   435→   435→    if (failed > 0 && success === 0) {
+   436→   436→      toast({
+   437→   437→        title: 'Error',
+   438→   438→        description: 'No se pudieron subir los archivos.',
+   439→   439→        variant: 'destructive',
+   440→   440→      });
+   441→   441→    }
+   442→   442→  };
+   443→   443→
+   444→   444→  return (
+   445→   445→    <Dialog>
+   446→   446→      <DialogTrigger asChild>
+   447→   447→        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium h-11 gap-2">
+   448→   448→          <Upload className="h-4 w-4" />
+   449→   449→          Subir archivos
+   450→   450→        </Button>
+   451→   451→      </DialogTrigger>
+   452→   452→      <DialogContent className="sm:max-w-lg">
+   453→   453→        <DialogHeader>
+   454→   454→          <DialogTitle>Subir archivos</DialogTitle>
+   455→   455→          <DialogDescription>
+   456→   456→            Arrastra archivos aquí o haz clic para seleccionar. Máximo 5GB por archivo.
+   457→   457→          </DialogDescription>
+   458→   458→        </DialogHeader>
+   459→   459→
+   460→   460→        <div
+   461→   461→          className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
+   462→   462→            dragActive
+   463→   463→              ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30'
+   464→   464→              : 'border-muted-foreground/25 hover:border-emerald-400 hover:bg-muted/50'
+   465→   465→          }`}
+   466→   466→          onDrop={handleDrop}
+   467→   467→          onDragOver={handleDragOver}
+   468→   468→          onDragLeave={handleDragLeave}
+   469→   469→          onClick={() => fileInputRef.current?.click()}
+   470→   470→        >
+   471→   471→          <CloudUpload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+   472→   472→          <p className="text-sm font-medium">Arrastra archivos aquí</p>
+   473→   473→          <p className="text-xs text-muted-foreground mt-1">o haz clic para seleccionar</p>
+   474→   474→          <input
+   475→   475→            ref={fileInputRef}
+   476→   476→            type="file"
+   477→   477→            multiple
+   478→   478→            className="hidden"
+   479→   479→            onChange={(e) => handleFiles(e.target.files)}
+   480→   480→          />
+   481→   481→        </div>
+   482→   482→
+   483→   483→        {files.length > 0 && (
+   484→   484→          <div className="space-y-2 max-h-48 overflow-y-auto">
+   485→   485→            {files.map((f, i) => (
+   486→   486→              <div key={`${f.name}-${i}`} className="flex items-center gap-3 p-2 rounded-lg bg-muted/50">
+   487→   487→                {getFileIcon(f.type)}
+   488→   488→                <div className="flex-1 min-w-0">
+   489→   489→                  <p className="text-sm font-medium truncate">{f.name}</p>
+   490→   490→                  <p className="text-xs text-muted-foreground">{formatBytes(f.size)}</p>
+   491→   491→                </div>
+   492→   492→                <Button
+   493→   493→                  variant="ghost"
+   494→   494→                  size="icon"
+   495→   495→                  className="h-8 w-8 shrink-0"
+   496→   496→                  onClick={(e) => {
+   497→   497→                    e.stopPropagation();
+   498→   498→                    removeFile(i);
+   499→   499→                  }}
+   500→   500→                  disabled={uploading}
+   501→   501→                >
+   502→   502→                  <X className="h-4 w-4" />
+   503→   503→                </Button>
+   504→   504→              </div>
+   505→   505→            ))}
+   506→   506→          </div>
+   507→   507→        )}
+   508→   508→
+   509→   509→        {uploading && (
+   510→   510→          <div className="space-y-2">
+   511→   511→            <Progress value={progress} className="h-2" />
+   512→   512→            <p className="text-xs text-center text-muted-foreground">{progress}% completado</p>
+   513→   513→          </div>
+   514→   514→        )}
+   515→   515→
+   516→   516→        <div className="flex justify-end gap-2">
+   517→   517→          <Button
+   518→   518→            variant="outline"
+   519→   519→            onClick={() => setFiles([])}
+   520→   520→            disabled={uploading || files.length === 0}
+   521→   521→          >
+   522→   522→            Limpiar
+   523→   523→          </Button>
+   524→   524→          <Button
+   525→   525→            onClick={upload}
+   526→   526→            disabled={uploading || files.length === 0}
+   527→   527→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   528→   528→          >
+   529→   529→            {uploading ? (
+   530→   530→              <>
+   531→   531→                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+   532→   532→                Subiendo...
+   533→   533→              </>
+   534→   534→            ) : (
+   535→   535→              <>
+   536→   536→                <Upload className="h-4 w-4 mr-2" />
+   537→   537→                Subir {files.length > 0 ? `(${files.length})` : ''}
+   538→   538→              </>
+   539→   539→            )}
+   540→   540→          </Button>
+   541→   541→        </div>
+   542→   542→      </DialogContent>
+   543→   543→    </Dialog>
+   544→   544→  );
+   545→   545→}
+   546→   546→
+   547→   547→/* ──────────── File Card ──────────── */
+   548→   548→function FileCard({
+   549→   549→  file,
+   550→   550→  onDelete,
+   551→   551→}: {
+   552→   552→  file: FileItem;
+   553→   553→  onDelete: (id: string) => void;
+   554→   554→}) {
+   555→   555→  const [copied, setCopied] = useState(false);
+   556→   556→  const [deleting, setDeleting] = useState(false);
+   557→   557→  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+   558→   558→  const { toast } = useToast();
+   559→   559→
+   560→   560→  const shareUrl = getShareUrl(file.shareId);
+   561→   561→
+   562→   562→  const copyLink = async () => {
+   563→   563→    try {
+   564→   564→      await navigator.clipboard.writeText(shareUrl);
+   565→   565→      setCopied(true);
+   566→   566→      toast({ title: 'Enlace copiado', description: 'El enlace de descarga está en tu portapapeles.' });
+   567→   567→      setTimeout(() => setCopied(false), 2000);
+   568→   568→    } catch {
+   569→   569→      toast({ title: 'Error', description: 'No se pudo copiar el enlace.', variant: 'destructive' });
+   570→   570→    }
+   571→   571→  };
+   572→   572→
+   573→   573→  const handleDelete = async () => {
+   574→   574→    setDeleting(true);
+   575→   575→    try {
+   576→   576→      const res = await fetch(`/api/files?id=${file.id}`, { method: 'DELETE' });
+   577→   577→      if (res.ok) {
+   578→   578→        toast({ title: 'Eliminado', description: 'El archivo ha sido eliminado.' });
+   579→   579→        onDelete(file.id);
+   580→   580→      } else {
+   581→   581→        toast({ title: 'Error', description: 'No se pudo eliminar el archivo.', variant: 'destructive' });
+   582→   582→      }
+   583→   583→    } catch {
+   584→   584→      toast({ title: 'Error', description: 'Error de conexión.', variant: 'destructive' });
+   585→   585→    } finally {
+   586→   586→      setDeleting(false);
+   587→   587→      setShowDeleteDialog(false);
+   588→   588→    }
+   589→   589→  };
+   590→   590→
+   591→   591→  return (
+   592→   592→    <>
+   593→   593→      <motion.div
+   594→   594→        initial={{ opacity: 0, y: 10 }}
+   595→   595→        animate={{ opacity: 1, y: 0 }}
+   596→   596→        exit={{ opacity: 0, y: -10 }}
+   597→   597→        layout
+   598→   598→        className="group"
+   599→   599→      >
+   600→   600→        <Card className="hover:shadow-md transition-shadow border-border/60">
+   601→   601→          <CardContent className="p-4">
+   602→   602→            <div className="flex items-start gap-3">
+   603→   603→              <div className="shrink-0 mt-0.5">{getFileIcon(file.mimeType)}</div>
+   604→   604→              <div className="flex-1 min-w-0">
+   605→   605→                <p className="font-medium text-sm truncate" title={file.originalName}>
+   606→   606→                  {file.originalName}
+   607→   607→                </p>
+   608→   608→                <div className="flex items-center gap-2 mt-1 flex-wrap">
+   609→   609→                  <Badge variant="secondary" className="text-xs font-normal">
+   610→   610→                    {getFileExtension(file.originalName)}
+   611→   611→                  </Badge>
+   612→   612→                  <span className="text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+   613→   613→                  <span className="text-xs text-muted-foreground">•</span>
+   614→   614→                  <span className="text-xs text-muted-foreground">{formatDate(file.createdAt)}</span>
+   615→   615→                </div>
+   616→   616→                <div className="flex items-center gap-1.5 mt-1.5 text-xs text-muted-foreground">
+   617→   617→                  <Eye className="h-3 w-3" />
+   618→   618→                  <span>{file.downloads} descarga{file.downloads !== 1 ? 's' : ''}</span>
+   619→   619→                </div>
+   620→   620→              </div>
+   621→   621→            </div>
+   622→   622→
+   623→   623→            <Separator className="my-3" />
+   624→   624→
+   625→   625→            <div className="flex items-center gap-2">
+   626→   626→              <Button
+   627→   627→                variant="outline"
+   628→   628→                size="sm"
+   629→   629→                className="flex-1 h-9 text-xs gap-1.5"
+   630→   630→                onClick={() => window.open(`/api/files/${file.id}/download`, '_blank')}
+   631→   631→              >
+   632→   632→                <Download className="h-3.5 w-3.5" />
+   633→   633→                Descargar
+   634→   634→              </Button>
+   635→   635→              <Button
+   636→   636→                variant="outline"
+   637→   637→                size="sm"
+   638→   638→                className="flex-1 h-9 text-xs gap-1.5"
+   639→   639→                onClick={copyLink}
+   640→   640→              >
+   641→   641→                {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+   642→   642→                {copied ? 'Copiado' : 'Copiar enlace'}
+   643→   643→              </Button>
+   644→   644→              <Button
+   645→   645→                variant="outline"
+   646→   646→                size="icon"
+   647→   647→                className="h-9 w-9 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+   648→   648→                onClick={() => setShowDeleteDialog(true)}
+   649→   649→                disabled={deleting}
+   650→   650→              >
+   651→   651→                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+   652→   652→              </Button>
+   653→   653→            </div>
+   654→   654→          </CardContent>
+   655→   655→        </Card>
+   656→   656→      </motion.div>
+   657→   657→
+   658→   658→      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+   659→   659→        <AlertDialogContent>
+   660→   660→          <AlertDialogHeader>
+   661→   661→            <AlertDialogTitle>¿Eliminar archivo?</AlertDialogTitle>
+   662→   662→            <AlertDialogDescription>
+   663→   663→              Vas a eliminar &quot;{file.originalName}&quot;. Esta acción no se puede deshacer y el enlace de
+   664→   664→              descarga dejará de funcionar.
+   665→   665→            </AlertDialogDescription>
+   666→   666→          </AlertDialogHeader>
+   667→   667→          <AlertDialogFooter>
+   668→   668→            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+   669→   669→            <AlertDialogAction
+   670→   670→              onClick={handleDelete}
+   671→   671→              className="bg-destructive text-white hover:bg-destructive/90"
+   672→   672→            >
+   673→   673→              Eliminar
+   674→   674→            </AlertDialogAction>
+   675→   675→          </AlertDialogFooter>
+   676→   676→        </AlertDialogContent>
+   677→   677→      </AlertDialog>
+   678→   678→    </>
+   679→   679→  );
+   680→   680→}
+   681→   681→
+   682→   682→/* ──────────── Dashboard Component ──────────── */
+   683→   683→function Dashboard({ user: initialUser, onLogout }: { user: User; onLogout: () => void }) {
+   684→   684→  const [user, setUser] = useState<User>(initialUser);
+   685→   685→  const [files, setFiles] = useState<FileItem[]>([]);
+   686→   686→  const [loading, setLoading] = useState(true);
+   687→   687→  const [searchTerm, setSearchTerm] = useState('');
+   688→   688→  const [stats, setStats] = useState({ totalFiles: 0, totalSize: 0, totalDownloads: 0 });
+   689→   689→  const { toast } = useToast();
+   690→   690→
+   691→   691→  const loadFiles = useCallback(async () => {
+   692→   692→    try {
+   693→   693→      const res = await fetch('/api/files');
+   694→   694→      if (res.ok) {
+   695→   695→        const data = await res.json();
+   696→   696→        setFiles(data.files);
+   697→   697→        setStats({
+   698→   698→          totalFiles: data.files.length,
+   699→   699→          totalSize: data.files.reduce((acc: number, f: FileItem) => acc + f.size, 0),
+   700→   700→          totalDownloads: data.files.reduce((acc: number, f: FileItem) => acc + f.downloads, 0),
+   701→   701→        });
+   702→   702→      }
+   703→   703→    } catch {
+   704→   704→      toast({ title: 'Error', description: 'No se pudieron cargar los archivos.', variant: 'destructive' });
+   705→   705→    } finally {
+   706→   706→      setLoading(false);
+   707→   707→    }
+   708→   708→  }, [toast]);
+   709→   709→
+   710→   710→  useEffect(() => {
+   711→   711→    loadFiles();
+   712→   712→  }, [loadFiles]);
+   713→   713→
+   714→   714→  const handleLogout = async () => {
+   715→   715→    await fetch('/api/auth/me', { method: 'POST' });
+   716→   716→    onLogout();
+   717→   717→  };
+   718→   718→
+   719→   719→  const handleDeleteFile = (id: string) => {
+   720→   720→    setFiles((prev) => prev.filter((f) => f.id !== id));
+   721→   721→    loadFiles();
+   722→   722→  };
+   723→   723→
+   724→   724→  const filteredFiles = files.filter((f) =>
+   725→   725→    f.originalName.toLowerCase().includes(searchTerm.toLowerCase())
+   726→   726→  );
+   727→   727→
+   728→   728→  return (
+   729→   729→    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-emerald-50/30 dark:from-gray-950 dark:to-gray-900">
+   730→   730→      {/* Header */}
+   731→   731→      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-lg border-b">
+   732→   732→        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+   733→   733→          <div className="flex items-center gap-3">
+   734→   734→            <div className="flex items-center justify-center w-9 h-9 bg-emerald-600 rounded-xl">
+   735→   735→              <Cloud className="h-5 w-5 text-white" />
+   736→   736→            </div>
+   737→   737→            <h1 className="text-lg font-bold tracking-tight">FileVault</h1>
+   738→   738→          </div>
+   739→   739→
+   740→   740→          <div className="flex items-center gap-3">
+   741→   741→            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm">
+   742→   742→              <div className="w-6 h-6 bg-emerald-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+   743→   743→                {user.username[0].toUpperCase()}
+   744→   744→              </div>
+   745→   745→              <span className="font-medium">{user.username}</span>
+   746→   746→            </div>
+   747→   747→            <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-destructive">
+   748→   748→              <LogOut className="h-4 w-4" />
+   749→   749→            </Button>
+   750→   750→          </div>
+   751→   751→        </div>
+   752→   752→      </header>
+   753→   753→
+   754→   754→      {/* Main */}
+   755→   755→      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-8">
+   756→   756→        {/* Stats */}
+   757→   757→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
+   758→   758→          {[
+   759→   759→            { label: 'Archivos', value: stats.totalFiles, icon: FolderOpen, color: 'text-emerald-600' },
+   760→   760→            { label: 'Almacenado', value: formatBytes(stats.totalSize), icon: HardDrive, color: 'text-sky-600' },
+   761→   761→            { label: 'Descargas', value: stats.totalDownloads, icon: Download, color: 'text-violet-600' },
+   762→   762→            { label: 'Enlaces activos', value: stats.totalFiles, icon: Link2, color: 'text-amber-600' },
+   763→   763→          ].map((stat) => (
+   764→   764→            <Card key={stat.label} className="border-border/60">
+   765→   765→              <CardContent className="p-4">
+   766→   766→                <div className="flex items-center gap-2 mb-1">
+   767→   767→                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
+   768→   768→                  <span className="text-xs text-muted-foreground font-medium">{stat.label}</span>
+   769→   769→                </div>
+   770→   770→                <p className="text-xl sm:text-2xl font-bold">{stat.value}</p>
+   771→   771→              </CardContent>
+   772→   772→            </Card>
+   773→   773→          ))}
+   774→   774→        </div>
+   775→   775→
+   776→   776→        {/* Toolbar */}
+   777→   777→        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+   778→   778→          <h2 className="text-lg font-semibold">Mis archivos</h2>
+   779→   779→          <div className="flex items-center gap-2 w-full sm:w-auto">
+   780→   780→            <Input
+   781→   781→              placeholder="Buscar archivos..."
+   782→   782→              value={searchTerm}
+   783→   783→              onChange={(e) => setSearchTerm(e.target.value)}
+   784→   784→              className="h-10 flex-1 sm:w-64"
+   785→   785→            />
+   786→   786→            <UploadDialog onUploaded={loadFiles} />
+   787→   787→          </div>
+   788→   788→        </div>
+   789→   789→
+   790→   790→        {/* File list */}
+   791→   791→        {loading ? (
+   792→   792→          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   793→   793→            {[1, 2, 3, 4, 5, 6].map((i) => (
+   794→   794→              <Card key={i} className="border-border/60">
+   795→   795→                <CardContent className="p-4">
+   796→   796→                  <div className="flex items-center gap-3">
+   797→   797→                    <div className="w-8 h-8 bg-muted rounded-lg animate-pulse" />
+   798→   798→                    <div className="flex-1 space-y-2">
+   799→   799→                      <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
+   800→   800→                      <div className="h-3 bg-muted rounded animate-pulse w-1/2" />
+   801→   801→                    </div>
+   802→   802→                  </div>
+   803→   803→                </CardContent>
+   804→   804→              </Card>
+   805→   805→            ))}
+   806→   806→          </div>
+   807→   807→        ) : filteredFiles.length === 0 ? (
+   808→   808→          <motion.div
+   809→   809→            initial={{ opacity: 0 }}
+   810→   810→            animate={{ opacity: 1 }}
+   811→   811→            className="text-center py-16"
+   812→   812→          >
+   813→   813→            <div className="inline-flex items-center justify-center w-16 h-16 bg-muted rounded-2xl mb-4">
+   814→   814→              <FolderOpen className="h-8 w-8 text-muted-foreground" />
+   815→   815→            </div>
+   816→   816→            <h3 className="text-lg font-semibold mb-1">
+   817→   817→              {searchTerm ? 'Sin resultados' : 'No hay archivos aún'}
+   818→   818→            </h3>
+   819→   819→            <p className="text-sm text-muted-foreground mb-4">
+   820→   820→              {searchTerm
+   821→   821→                ? `No se encontraron archivos que coincidan con "${searchTerm}".`
+   822→   822→                : 'Sube tu primer archivo para comenzar.'}
+   823→   823→            </p>
+   824→   824→            {!searchTerm && (
+   825→   825→              <UploadDialog onUploaded={loadFiles} />
+   826→   826→            )}
+   827→   827→          </motion.div>
+   828→   828→        ) : (
+   829→   829→          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   830→   830→            <AnimatePresence mode="popLayout">
+   831→   831→              {filteredFiles.map((file) => (
+   832→   832→                <FileCard key={file.id} file={file} onDelete={handleDeleteFile} />
+   833→   833→              ))}
+   834→   834→            </AnimatePresence>
+   835→   835→          </div>
+   836→   836→        )}
+   837→   837→      </main>
+   838→   838→
+   839→   839→      {/* Footer */}
+   840→   840→      <footer className="mt-auto border-t bg-background/60 backdrop-blur-sm">
+   841→   841→        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+   842→   842→          <span>FileVault — Tu almacenamiento en la nube personal</span>
+   843→   843→          <span>Powered by Next.js</span>
+   844→   844→        </div>
+   845→   845→      </footer>
+   846→   846→    </div>
+   847→   847→  );
+   848→   848→}
+   849→   849→
+   850→   850→/* ──────────── Main Page ──────────── */
+   851→   851→export default function HomePage() {
+   852→   852→  const [view, setView] = useState<View>('auth');
+   853→   853→  const [user, setUser] = useState<User | null>(null);
+   854→   854→  const [initialLoading, setInitialLoading] = useState(true);
+   855→   855→
+   856→   856→  useEffect(() => {
+   857→   857→    // Check for existing session
+   858→   858→    fetch('/api/auth/me')
+   859→   859→      .then((res) => {
+   860→   860→        if (res.ok) return res.json();
+   861→   861→        throw new Error('Not authenticated');
+   862→   862→      })
+   863→   863→      .then((data) => {
+   864→   864→        setUser(data.user);
+   865→   865→        setView('dashboard');
+   866→   866→      })
+   867→   867→      .catch(() => {
+   868→   868→        setView('auth');
+   869→   869→      })
+   870→   870→      .finally(() => setInitialLoading(false));
+   871→   871→  }, []);
+   872→   872→
+   873→   873→  const handleLogin = (loggedInUser: User) => {
+   874→   874→    setUser(loggedInUser);
+   875→   875→    setView('dashboard');
+   876→   876→  };
+   877→   877→
+   878→   878→  const handleLogout = () => {
+   879→   879→    setUser(null);
+   880→   880→    setView('auth');
+   881→   881→  };
+   882→   882→
+   883→   883→  if (initialLoading) {
+   884→   884→    return (
+   885→   885→      <div className="min-h-screen flex items-center justify-center bg-background">
+   886→   886→        <motion.div
+   887→   887→          initial={{ opacity: 0, scale: 0.9 }}
+   888→   888→          animate={{ opacity: 1, scale: 1 }}
+   889→   889→          className="text-center"
+   890→   890→        >
+   891→   891→          <div className="inline-flex items-center justify-center w-16 h-16 bg-emerald-600 rounded-2xl mb-4 shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30">
+   892→   892→            <Cloud className="h-8 w-8 text-white" />
+   893→   893→          </div>
+   894→   894→          <p className="text-sm text-muted-foreground">Cargando...</p>
+   895→   895→        </motion.div>
+   896→   896→      </div>
+   897→   897→    );
+   898→   898→  }
+   899→   899→
+   900→   900→  return (
+   901→   901→    <AnimatePresence mode="wait">
+   902→   902→      {view === 'auth' ? (
+   903→   903→        <motion.div key="auth" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+   904→   904→          <AuthScreen onLogin={handleLogin} />
+   905→   905→        </motion.div>
+   906→   906→      ) : (
+   907→   907→        user && (
+   908→   908→          <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+   909→   909→            <Dashboard user={user} onLogout={handleLogout} />
+   910→   910→          </motion.div>
+   911→   911→        )
+   912→   912→      )}
+   913→   913→    </AnimatePresence>
+   914→   914→  );
+   915→   915→}
