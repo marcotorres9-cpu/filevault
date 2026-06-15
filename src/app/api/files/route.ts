@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getSession } from '@/lib/auth';
 import { deleteFromR2 } from '@/lib/r2';
 
 // GET: Public — anyone can see all files
@@ -21,74 +20,54 @@ export async function GET() {
   }
 }
 
-// DELETE: Auth via cookie — for old cached client in WebView
-export async function DELETE(request: NextRequest) {
-  try {
-    const session = await getSession(request);
-    if (!session) {
-      return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const fileId = searchParams.get('id');
-    if (!fileId) {
-      return NextResponse.json({ error: 'ID de archivo requerido.' }, { status: 400 });
-    }
-
-    const file = await db.file.findUnique({ where: { id: fileId } });
-    if (!file) {
-      return NextResponse.json({ error: 'Archivo no encontrado.' }, { status: 404 });
-    }
-
-    try {
-      await deleteFromR2(file.r2Key);
-    } catch (r2Error) {
-      console.error('R2 delete error (continuing with DB delete):', r2Error);
-    }
-
-    await db.file.delete({ where: { id: fileId } });
-    return NextResponse.json({ message: 'Archivo eliminado.' });
-  } catch (error) {
-    console.error('DELETE error:', error);
-    return NextResponse.json({ error: 'Error al eliminar el archivo.' }, { status: 500 });
-  }
-}
-
-// POST /api/files?action=delete&id=xxx&token=xxx — for new client (WebView-safe)
+// POST: delete with action=delete&id=xxx
 export async function POST(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
 
     if (action === 'delete') {
-      const session = await getSession(request);
-      if (!session) {
-        return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
-      }
-
       const fileId = searchParams.get('id');
       if (!fileId) {
-        return NextResponse.json({ error: 'ID de archivo requerido.' }, { status: 400 });
+        return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
       }
 
       const file = await db.file.findUnique({ where: { id: fileId } });
       if (!file) {
-        return NextResponse.json({ error: 'Archivo no encontrado.' }, { status: 404 });
+        return NextResponse.json({ error: 'No encontrado.' }, { status: 404 });
       }
 
-      try {
-        await deleteFromR2(file.r2Key);
-      } catch (r2Error) {
-        console.error('R2 delete error (continuing with DB delete):', r2Error);
-      }
-
+      try { await deleteFromR2(file.r2Key); } catch (e) { console.error('R2:', e); }
       await db.file.delete({ where: { id: fileId } });
-      return NextResponse.json({ message: 'Archivo eliminado.' });
+      return NextResponse.json({ ok: true });
     }
 
-    return NextResponse.json({ error: 'Acción no válida.' }, { status: 400 });
+    return NextResponse.json({ error: 'Accion invalida.' }, { status: 400 });
   } catch (error) {
-    console.error('POST /api/files error:', error);
-    return NextResponse.json({ error: 'Error al procesar la solicitud.' }, { status: 500 });
+    console.error('POST error:', error);
+    return NextResponse.json({ error: 'Error.' }, { status: 500 });
+  }
+}
+
+// DELETE: no auth required — delete by id
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const fileId = searchParams.get('id');
+    if (!fileId) {
+      return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+    }
+
+    const file = await db.file.findUnique({ where: { id: fileId } });
+    if (!file) {
+      return NextResponse.json({ error: 'No encontrado.' }, { status: 404 });
+    }
+
+    try { await deleteFromR2(file.r2Key); } catch (e) { console.error('R2:', e); }
+    await db.file.delete({ where: { id: fileId } });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE error:', error);
+    return NextResponse.json({ error: 'Error.' }, { status: 500 });
   }
 }
