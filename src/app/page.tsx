@@ -21,15 +21,18 @@ import {
   Zap,
   FolderOpen,
   Eye,
+  EyeOff,
   HardDrive,
   X,
   Loader2,
   Cloud,
+  Lock,
+  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
@@ -58,7 +61,6 @@ interface User {
   id: string;
   username: string;
   createdAt: string;
-  fileCount?: number;
 }
 
 interface FileItem {
@@ -69,9 +71,8 @@ interface FileItem {
   shareId: string;
   downloads: number;
   createdAt: string;
+  user?: { username: string };
 }
-
-type View = 'auth' | 'dashboard';
 
 /* ──────────── Helpers ──────────── */
 function formatBytes(bytes: number): string {
@@ -116,800 +117,848 @@ function getShareUrl(shareId: string): string {
   return `/api/download/${shareId}`;
 }
 
-/* ──────────── Auth Component ──────────── */
-function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
-  const [isRegister, setIsRegister] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+/* ──────────── Main Page ──────────── */
+export default function FileVaultPage() {
   const { toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Auth state
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  // Auth dialog state
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [isRegister, setIsRegister] = useState(false);
+  const [authUsername, setAuthUsername] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  // Files state
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [filesLoading, setFilesLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Upload state
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete state
+  const [deleteTarget, setDeleteTarget] = useState<FileItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Restore token on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('fv_token');
+      if (stored) {
+        setAuthToken(stored);
+        return;
+      }
+    } catch {}
+    try {
+      const cookies = document.cookie.split(';');
+      for (const cookie of cookies) {
+        const [name, ...rest] = cookie.trim().split('=');
+        if (name === 'fv_token') {
+          const val = rest.join('=');
+          if (val) {
+            setAuthToken(val);
+            break;
+          }
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Fetch files (public, no auth needed)
+  const fetchFiles = useCallback(async () => {
+    try {
+      setFilesLoading(true);
+      const res = await fetch('/api/files');
+      if (!res.ok) throw new Error('Error al cargar archivos');
+      const data = await res.json();
+      setFiles(data.files || []);
+    } catch {
+      toast({ title: 'Error', description: 'No se pudieron cargar los archivos.', variant: 'destructive' });
+    } finally {
+      setFilesLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchFiles();
+  }, [fetchFiles]);
+
+  // Persist token
+  const persistToken = (token: string | null) => {
+    try { if (token) localStorage.setItem('fv_token', token); else localStorage.removeItem('fv_token'); } catch {}
+    try { document.cookie = `fv_token=${token || ''}; path=/; max-age=${token ? 86400 * 30 : 0}`; } catch {}
+  };
+
+  // Handle auth submit
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setAuthError('');
 
-    if (isRegister && password !== confirmPassword) {
-      setError('Las contraseñas no coinciden.');
+    if (isRegister && authPassword !== authConfirmPassword) {
+      setAuthError('Las contraseñas no coinciden.');
+      return;
+    }
+    if (isRegister && authPassword.length < 6) {
+      setAuthError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (isRegister && (authUsername.length < 3 || authUsername.length > 30)) {
+      setAuthError('El usuario debe tener entre 3 y 30 caracteres.');
       return;
     }
 
-    if (isRegister && password.length < 6) {
-      setError('La contraseña debe tener al menos 6 caracteres.');
-      return;
-    }
-
-    if (isRegister && (username.length < 3 || username.length > 30)) {
-      setError('El usuario debe tener entre 3 y 30 caracteres.');
-      return;
-    }
-
-    setLoading(true);
+    setAuthLoading(true);
     try {
       const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: authUsername, password: authPassword }),
       });
-
       const data = await res.json();
-
       if (!res.ok) {
-        setError(data.error || 'Error en la autenticación.');
+        setAuthError(data.error || 'Error en la autenticación.');
         return;
       }
-
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      persistToken(data.token);
+      setAuthDialogOpen(false);
+      setAuthUsername('');
+      setAuthPassword('');
+      setAuthConfirmPassword('');
       toast({
         title: isRegister ? 'Cuenta creada' : 'Bienvenido de vuelta',
         description: isRegister ? 'Tu cuenta ha sido creada exitosamente.' : `Hola, ${data.user.username}`,
       });
-
-      onLogin(data.user);
     } catch {
-      setError('Error de conexión. Intenta de nuevo.');
+      setAuthError('Error de conexión. Intenta de nuevo.');
     } finally {
-      setLoading(false);
+      setAuthLoading(false);
     }
   };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-4">
-      {/* Background decorations */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-emerald-200/30 dark:bg-emerald-900/20 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-teal-200/30 dark:bg-teal-900/20 rounded-full blur-3xl" />
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="relative w-full max-w-md"
-      >
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
-            className="inline-flex items-center justify-center w-16 h-16 bg-emerald-600 rounded-2xl mb-4 shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30"
-          >
-            <Cloud className="h-8 w-8 text-white" />
-          </motion.div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">FileVault</h1>
-          <p className="text-muted-foreground mt-1">Tu plataforma de archivos personal</p>
-        </div>
-
-        <Card className="border-0 shadow-xl shadow-black/5 dark:shadow-black/20">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-xl">
-              {isRegister ? 'Crear cuenta' : 'Iniciar sesión'}
-            </CardTitle>
-            <CardDescription>
-              {isRegister
-                ? 'Crea tu cuenta para empezar a subir archivos.'
-                : 'Ingresa tus credenciales para acceder.'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className="p-3 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400"
-                >
-                  {error}
-                </motion.div>
-              )}
-
-              <div className="space-y-2">
-                <Label htmlFor="username">Usuario</Label>
-                <Input
-                  id="username"
-                  placeholder="tu_usuario"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  autoComplete="username"
-                  className="h-11"
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="password">Contraseña</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete={isRegister ? 'new-password' : 'current-password'}
-                  className="h-11"
-                  disabled={loading}
-                />
-              </div>
-
-              {isRegister && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="space-y-2"
-                >
-                  <Label htmlFor="confirm">Confirmar contraseña</Label>
-                  <Input
-                    id="confirm"
-                    type="password"
-                    placeholder="••••••••"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                    className="h-11"
-                    disabled={loading}
-                  />
-                </motion.div>
-              )}
-
-              <Button
-                type="submit"
-                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
-                disabled={loading}
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : isRegister ? (
-                  'Crear cuenta'
-                ) : (
-                  'Iniciar sesión'
-                )}
-              </Button>
-
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsRegister(!isRegister);
-                    setError('');
-                  }}
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  disabled={loading}
-                >
-                  {isRegister ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
-                </button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        <div className="flex items-center justify-center gap-6 mt-8 text-xs text-muted-foreground">
-          <div className="flex items-center gap-1.5">
-            <Shield className="h-3.5 w-3.5" />
-            <span>Seguro</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Zap className="h-3.5 w-3.5" />
-            <span>Rápido</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Cloud className="h-3.5 w-3.5" />
-            <span>Gratis</span>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-/* ──────────── Upload Dialog ──────────── */
-function UploadDialog({ onUploaded }: { onUploaded: () => void }) {
-  const [files, setFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
-
-  const handleFiles = (fileList: FileList | null) => {
-    if (!fileList) return;
-    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+  // Handle logout
+  const handleLogout = () => {
+    setAuthToken(null);
+    setCurrentUser(null);
+    persistToken(null);
+    toast({ title: 'Sesión cerrada', description: 'Has cerrado sesión correctamente.' });
   };
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    handleFiles(e.dataTransfer.files);
-  }, []);
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(true);
-  };
-
-  const handleDragLeave = () => setDragActive(false);
-
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const upload = async () => {
-    if (files.length === 0) return;
+  // Handle file upload via presigned URL
+  const handleUpload = async () => {
+    if (!uploadFiles.length || !authToken) return;
     setUploading(true);
-    setProgress(0);
+    const progressMap: Record<string, number> = {};
+    let successCount = 0;
 
-    let success = 0;
-    let failed = 0;
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (const file of uploadFiles) {
       try {
-        // Step 1: Get presigned URL from our API (small request, no file data)
-        const presignRes = await fetch('/api/files/presign', {
+        // Step 1: Get presigned URL
+        const presignRes = await fetch(`/api/files/presign?token=${encodeURIComponent(authToken)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: file.name,
-            fileSize: file.size,
-            mimeType: file.type || 'application/octet-stream',
-          }),
+          body: JSON.stringify({ fileName: file.name, fileSize: file.size, mimeType: file.type }),
         });
+        const presignData = await presignRes.json();
+        if (!presignRes.ok) throw new Error(presignData.error || 'Error al obtener URL de subida');
 
-        if (!presignRes.ok) {
-          failed++;
-          setProgress(Math.round(((i + 1) / files.length) * 100));
-          continue;
-        }
+        // Step 2: Upload to R2 via presigned URL
+        progressMap[file.name] = 10;
+        setUploadProgress({ ...progressMap });
 
-        const { uploadUrl, r2Key } = await presignRes.json();
-
-        // Step 2: Upload file DIRECTLY to R2 (bypasses Vercel 4.5MB limit)
-        const uploadRes = await fetch(uploadUrl, {
+        const uploadRes = await fetch(presignData.uploadUrl, {
           method: 'PUT',
           body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          headers: { 'Content-Type': file.type },
         });
+        if (!uploadRes.ok) throw new Error('Error al subir archivo a R2');
 
-        if (!uploadRes.ok) {
-          failed++;
-          setProgress(Math.round(((i + 1) / files.length) * 100));
-          continue;
-        }
+        progressMap[file.name] = 70;
+        setUploadProgress({ ...progressMap });
 
-        // Step 3: Confirm - save metadata to database
-        const confirmRes = await fetch('/api/files/confirm', {
+        // Step 3: Confirm upload
+        const confirmRes = await fetch(`/api/files/confirm?token=${encodeURIComponent(authToken)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            r2Key,
+            r2Key: presignData.r2Key,
             originalName: file.name,
-            mimeType: file.type || 'application/octet-stream',
+            mimeType: file.type,
             size: file.size,
           }),
         });
+        const confirmData = await confirmRes.json();
+        if (!confirmRes.ok) throw new Error(confirmData.error || 'Error al confirmar subida');
 
-        if (confirmRes.ok) success++;
-        else failed++;
-      } catch {
-        failed++;
+        progressMap[file.name] = 100;
+        setUploadProgress({ ...progressMap });
+        successCount++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Error desconocido';
+        progressMap[file.name] = -1;
+        setUploadProgress({ ...progressMap });
+        toast({ title: 'Error al subir', description: `${file.name}: ${msg}`, variant: 'destructive' });
       }
-      setProgress(Math.round(((i + 1) / files.length) * 100));
     }
 
     setUploading(false);
-    setFiles([]);
-
-    if (success > 0) {
-      toast({
-        title: `${success} archivo${success > 1 ? 's' : ''} subido${success > 1 ? 's' : ''}`,
-        description: failed > 0 ? `${failed} archivo${failed > 1 ? 's' : ''} falló.` : 'Todos los archivos se subieron correctamente.',
-        variant: failed > 0 ? 'default' : 'default',
-      });
-      onUploaded();
-    }
-
-    if (failed > 0 && success === 0) {
-      toast({
-        title: 'Error',
-        description: 'No se pudieron subir los archivos.',
-        variant: 'destructive',
-      });
+    if (successCount > 0) {
+      toast({ title: 'Subida completa', description: `${successCount} archivo(s) subido(s) correctamente.` });
+      fetchFiles();
+      setUploadDialogOpen(false);
+      setUploadFiles([]);
+      setUploadProgress({});
     }
   };
 
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium h-11 gap-2">
-          <Upload className="h-4 w-4" />
-          Subir archivos
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Subir archivos</DialogTitle>
-          <DialogDescription>
-            Arrastra archivos aquí o haz clic para seleccionar. Máximo 5GB por archivo.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div
-          className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
-            dragActive
-              ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30'
-              : 'border-muted-foreground/25 hover:border-emerald-400 hover:bg-muted/50'
-          }`}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <CloudUpload className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-          <p className="text-sm font-medium">Arrastra archivos aquí</p>
-          <p className="text-xs text-muted-foreground mt-1">o haz clic para seleccionar</p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-        </div>
-
-        {files.length > 0 && (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {files.map((f, i) => (
-              <div key={`${f.name}-${i}`} className="flex items-center gap-3 p-2 rounded-lg bg-muted/50">
-                {getFileIcon(f.type)}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{f.name}</p>
-                  <p className="text-xs text-muted-foreground">{formatBytes(f.size)}</p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFile(i);
-                  }}
-                  disabled={uploading}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {uploading && (
-          <div className="space-y-2">
-            <Progress value={progress} className="h-2" />
-            <p className="text-xs text-center text-muted-foreground">{progress}% completado</p>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setFiles([])}
-            disabled={uploading || files.length === 0}
-          >
-            Limpiar
-          </Button>
-          <Button
-            onClick={upload}
-            disabled={uploading || files.length === 0}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            {uploading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Subiendo...
-              </>
-            ) : (
-              <>
-                <Upload className="h-4 w-4 mr-2" />
-                Subir {files.length > 0 ? `(${files.length})` : ''}
-              </>
-            )}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ──────────── File Card ──────────── */
-function FileCard({
-  file,
-  onDelete,
-}: {
-  file: FileItem;
-  onDelete: (id: string) => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const { toast } = useToast();
-
-  const shareUrl = getShareUrl(file.shareId);
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      toast({ title: 'Enlace copiado', description: 'El enlace de descarga está en tu portapapeles.' });
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast({ title: 'Error', description: 'No se pudo copiar el enlace.', variant: 'destructive' });
-    }
-  };
-
+  // Handle delete — MUST use POST, not DELETE method (Android WebView compatibility)
   const handleDelete = async () => {
+    if (!deleteTarget || !authToken) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/files?id=${file.id}`, { method: 'DELETE' });
-      if (res.ok) {
-        toast({ title: 'Eliminado', description: 'El archivo ha sido eliminado.' });
-        onDelete(file.id);
+      const res = await fetch(`/api/files?action=delete&id=${encodeURIComponent(deleteTarget.id)}&token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const errMsg = data.error || data.details || 'Error al eliminar el archivo';
+        toast({ title: 'Error al eliminar', description: errMsg, variant: 'destructive' });
       } else {
-        toast({ title: 'Error', description: 'No se pudo eliminar el archivo.', variant: 'destructive' });
+        toast({ title: 'Archivo eliminado', description: `"${deleteTarget.originalName}" ha sido eliminado.` });
+        fetchFiles();
       }
-    } catch {
-      toast({ title: 'Error', description: 'Error de conexión.', variant: 'destructive' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error de conexión';
+      toast({ title: 'Error al eliminar', description: msg, variant: 'destructive' });
     } finally {
       setDeleting(false);
-      setShowDeleteDialog(false);
+      setDeleteTarget(null);
     }
   };
 
-  return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -10 }}
-        layout
-        className="group"
-      >
-        <Card className="hover:shadow-md transition-shadow border-border/60">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <div className="shrink-0 mt-0.5">{getFileIcon(file.mimeType)}</div>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm truncate" title={file.originalName}>
-                  {file.originalName}
-                </p>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <Badge variant="secondary" className="text-xs font-normal">
-                    {getFileExtension(file.originalName)}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                  <span className="text-xs text-muted-foreground">•</span>
-                  <span className="text-xs text-muted-foreground">{formatDate(file.createdAt)}</span>
-                </div>
-                <div className="flex items-center gap-1.5 mt-1.5 text-xs text-muted-foreground">
-                  <Eye className="h-3 w-3" />
-                  <span>{file.downloads} descarga{file.downloads !== 1 ? 's' : ''}</span>
-                </div>
-              </div>
-            </div>
-
-            <Separator className="my-3" />
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 h-9 text-xs gap-1.5"
-                onClick={() => window.open(`/api/files/${file.id}/download`, '_blank')}
-              >
-                <Download className="h-3.5 w-3.5" />
-                Descargar
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1 h-9 text-xs gap-1.5"
-                onClick={copyLink}
-              >
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                {copied ? 'Copiado' : 'Copiar enlace'}
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                onClick={() => setShowDeleteDialog(true)}
-                disabled={deleting}
-              >
-                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>¿Eliminar archivo?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Vas a eliminar &quot;{file.originalName}&quot;. Esta acción no se puede deshacer y el enlace de
-              descarga dejará de funcionar.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-destructive text-white hover:bg-destructive/90"
-            >
-              Eliminar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  );
-}
-
-/* ──────────── Dashboard Component ──────────── */
-function Dashboard({ user: initialUser, onLogout }: { user: User; onLogout: () => void }) {
-  const [user, setUser] = useState<User>(initialUser);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [stats, setStats] = useState({ totalFiles: 0, totalSize: 0, totalDownloads: 0 });
-  const { toast } = useToast();
-
-  const loadFiles = useCallback(async () => {
+  // Handle copy share link
+  const handleCopyLink = (shareId: string) => {
+    const url = getShareUrl(shareId);
     try {
-      const res = await fetch('/api/files');
-      if (res.ok) {
-        const data = await res.json();
-        setFiles(data.files);
-        setStats({
-          totalFiles: data.files.length,
-          totalSize: data.files.reduce((acc: number, f: FileItem) => acc + f.size, 0),
-          totalDownloads: data.files.reduce((acc: number, f: FileItem) => acc + f.downloads, 0),
-        });
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
       }
+      toast({ title: 'Enlace copiado', description: 'El enlace de descarga se ha copiado al portapapeles.' });
     } catch {
-      toast({ title: 'Error', description: 'No se pudieron cargar los archivos.', variant: 'destructive' });
-    } finally {
-      setLoading(false);
+      toast({ title: 'Enlace', description: url });
     }
-  }, [toast]);
-
-  useEffect(() => {
-    loadFiles();
-  }, [loadFiles]);
-
-  const handleLogout = async () => {
-    await fetch('/api/auth/me', { method: 'POST' });
-    onLogout();
   };
 
-  const handleDeleteFile = (id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    loadFiles();
-  };
-
+  // Filtered files
   const filteredFiles = files.filter((f) =>
-    f.originalName.toLowerCase().includes(searchTerm.toLowerCase())
+    f.originalName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-emerald-50/30 dark:from-gray-950 dark:to-gray-900">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-lg border-b">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-9 h-9 bg-emerald-600 rounded-xl">
-              <Cloud className="h-5 w-5 text-white" />
-            </div>
-            <h1 className="text-lg font-bold tracking-tight">FileVault</h1>
-          </div>
+  // Stats
+  const totalFiles = files.length;
+  const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+  const totalDownloads = files.reduce((acc, f) => acc + f.downloads, 0);
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-sm">
-              <div className="w-6 h-6 bg-emerald-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                {user.username[0].toUpperCase()}
+  return (
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      {/* Background decorations */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-emerald-200/30 dark:bg-emerald-900/20 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-teal-200/30 dark:bg-teal-900/20 rounded-full blur-3xl" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-100/20 dark:bg-emerald-900/10 rounded-full blur-3xl" />
+      </div>
+
+      {/* ──── Header ──── */}
+      <header className="relative z-10 sticky top-0 backdrop-blur-xl bg-white/70 dark:bg-gray-950/70 border-b border-emerald-100 dark:border-emerald-900/30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            {/* Logo */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30">
+                <Cloud className="h-5 w-5 text-white" />
               </div>
-              <span className="font-medium">{user.username}</span>
+              <div>
+                <h1 className="text-xl font-bold tracking-tight text-foreground">
+                  File<span className="text-emerald-600 dark:text-emerald-400">Vault</span>
+                </h1>
+              </div>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-destructive">
-              <LogOut className="h-4 w-4" />
-            </Button>
+
+            {/* Right side */}
+            <div className="flex items-center gap-3">
+              {currentUser && authToken ? (
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="flex items-center gap-3"
+                >
+                  {/* User badge */}
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/50 rounded-full border border-emerald-200 dark:border-emerald-800">
+                    <div className="flex items-center justify-center w-6 h-6 bg-emerald-600 text-white text-xs font-bold rounded-full">
+                      {currentUser.username.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300 hidden sm:inline">
+                      {currentUser.username}
+                    </span>
+                  </div>
+
+                  {/* Upload button */}
+                  <Button
+                    onClick={() => { setUploadDialogOpen(true); setUploadFiles([]); setUploadProgress({}); }}
+                    className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30"
+                  >
+                    <CloudUpload className="h-4 w-4 mr-2" />
+                    Subir archivos
+                  </Button>
+
+                  {/* Logout */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleLogout}
+                    className="text-muted-foreground hover:text-red-500"
+                    title="Cerrar sesión"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </motion.div>
+              ) : (
+                <Dialog open={authDialogOpen} onOpenChange={(open) => { setAuthDialogOpen(open); if (!open) { setAuthError(''); setAuthUsername(''); setAuthPassword(''); setAuthConfirmPassword(''); setIsRegister(false); } }}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50">
+                      <Lock className="h-4 w-4 mr-2" />
+                      Admin
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-md border-emerald-100 dark:border-emerald-900/50">
+                    <DialogHeader>
+                      <DialogTitle className="text-xl">
+                        {isRegister ? 'Crear cuenta' : 'Iniciar sesión'}
+                      </DialogTitle>
+                      <DialogDescription>
+                        {isRegister
+                          ? 'Crea tu cuenta para gestionar archivos.'
+                          : 'Ingresa tus credenciales para acceder.'}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleAuthSubmit} className="space-y-4 mt-2">
+                      {authError && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          className="p-3 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-600 dark:text-red-400"
+                        >
+                          {authError}
+                        </motion.div>
+                      )}
+
+                      <div className="space-y-2">
+                        <Label htmlFor="auth-username">Usuario</Label>
+                        <div className="relative">
+                          <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="auth-username"
+                            placeholder="tu_usuario"
+                            value={authUsername}
+                            onChange={(e) => setAuthUsername(e.target.value)}
+                            required
+                            autoComplete="username"
+                            className="pl-9 h-11"
+                            disabled={authLoading}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="auth-password">Contraseña</Label>
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="auth-password"
+                            type={showPassword ? 'text' : 'password'}
+                            placeholder="••••••••"
+                            value={authPassword}
+                            onChange={(e) => setAuthPassword(e.target.value)}
+                            required
+                            autoComplete={isRegister ? 'new-password' : 'current-password'}
+                            className="pl-9 pr-10 h-11"
+                            disabled={authLoading}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                            tabIndex={-1}
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isRegister && (
+                        <div className="space-y-2">
+                          <Label htmlFor="auth-confirm-password">Confirmar contraseña</Label>
+                          <div className="relative">
+                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="auth-confirm-password"
+                              type={showConfirmPassword ? 'text' : 'password'}
+                              placeholder="••••••••"
+                              value={authConfirmPassword}
+                              onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                              required
+                              autoComplete="new-password"
+                              className="pl-9 pr-10 h-11"
+                              disabled={authLoading}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                              tabIndex={-1}
+                            >
+                              {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <Button
+                        type="submit"
+                        className="w-full h-11 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white"
+                        disabled={authLoading}
+                      >
+                        {authLoading ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Procesando...
+                          </>
+                        ) : isRegister ? (
+                          'Registrarse'
+                        ) : (
+                          'Iniciar sesión'
+                        )}
+                      </Button>
+
+                      <div className="text-center text-sm">
+                        <button
+                          type="button"
+                          onClick={() => { setIsRegister(!isRegister); setAuthError(''); }}
+                          className="text-emerald-600 dark:text-emerald-400 hover:underline font-medium"
+                        >
+                          {isRegister ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
+                        </button>
+                      </div>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-8">
-        {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
-          {[
-            { label: 'Archivos', value: stats.totalFiles, icon: FolderOpen, color: 'text-emerald-600' },
-            { label: 'Almacenado', value: formatBytes(stats.totalSize), icon: HardDrive, color: 'text-sky-600' },
-            { label: 'Descargas', value: stats.totalDownloads, icon: Download, color: 'text-violet-600' },
-            { label: 'Enlaces activos', value: stats.totalFiles, icon: Link2, color: 'text-amber-600' },
-          ].map((stat) => (
-            <Card key={stat.label} className="border-border/60">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
-                  <span className="text-xs text-muted-foreground font-medium">{stat.label}</span>
+      {/* ──── Main Content ──── */}
+      <main className="relative z-10 flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+        {/* Stats Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8"
+        >
+          <Card className="border-0 shadow-lg shadow-black/5 dark:shadow-black/20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 bg-emerald-100 dark:bg-emerald-900/40 rounded-lg">
+                  <FolderOpen className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
-                <p className="text-xl sm:text-2xl font-bold">{stat.value}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Archivos</p>
+                  <p className="text-2xl font-bold text-foreground">{totalFiles}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-lg shadow-black/5 dark:shadow-black/20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 bg-teal-100 dark:bg-teal-900/40 rounded-lg">
+                  <HardDrive className="h-5 w-5 text-teal-600 dark:text-teal-400" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Almacenado</p>
+                  <p className="text-2xl font-bold text-foreground">{formatBytes(totalSize)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-lg shadow-black/5 dark:shadow-black/20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 bg-violet-100 dark:bg-violet-900/40 rounded-lg">
+                  <Download className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Descargas</p>
+                  <p className="text-2xl font-bold text-foreground">{totalDownloads}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-lg shadow-black/5 dark:shadow-black/20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 bg-amber-100 dark:bg-amber-900/40 rounded-lg">
+                  <Link2 className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Enlaces activos</p>
+                  <p className="text-2xl font-bold text-foreground">{totalFiles}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-        {/* Toolbar */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-          <h2 className="text-lg font-semibold">Mis archivos</h2>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+        {/* Search & Title */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.1 }}
+          className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6"
+        >
+          <div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+              Todos los archivos
+            </h2>
+            <p className="text-muted-foreground mt-1">
+              {filteredFiles.length} archivo{filteredFiles.length !== 1 ? 's' : ''} disponible{filteredFiles.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+          <div className="relative w-full sm:w-72">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Buscar archivos..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="h-10 flex-1 sm:w-64"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm border-emerald-100 dark:border-emerald-900/50"
             />
-            <UploadDialog onUploaded={loadFiles} />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
-        </div>
+        </motion.div>
 
-        {/* File list */}
-        {loading ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <Card key={i} className="border-border/60">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-muted rounded-lg animate-pulse" />
-                    <div className="flex-1 space-y-2">
-                      <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
-                      <div className="h-3 bg-muted rounded animate-pulse w-1/2" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+        {/* Files Grid */}
+        {filesLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 text-emerald-600 animate-spin" />
           </div>
         ) : filteredFiles.length === 0 ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="text-center py-16"
+            className="flex flex-col items-center justify-center py-20 text-center"
           >
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-muted rounded-2xl mb-4">
+            <div className="flex items-center justify-center w-16 h-16 bg-muted rounded-2xl mb-4">
               <FolderOpen className="h-8 w-8 text-muted-foreground" />
             </div>
-            <h3 className="text-lg font-semibold mb-1">
-              {searchTerm ? 'Sin resultados' : 'No hay archivos aún'}
+            <h3 className="text-lg font-semibold text-foreground mb-1">
+              {searchQuery ? 'Sin resultados' : 'No hay archivos'}
             </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              {searchTerm
-                ? `No se encontraron archivos que coincidan con "${searchTerm}".`
-                : 'Sube tu primer archivo para comenzar.'}
+            <p className="text-muted-foreground">
+              {searchQuery ? 'Intenta con otro término de búsqueda.' : 'Los archivos subidos aparecerán aquí.'}
             </p>
-            {!searchTerm && (
-              <UploadDialog onUploaded={loadFiles} />
-            )}
           </motion.div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <AnimatePresence mode="popLayout">
               {filteredFiles.map((file) => (
-                <FileCard key={file.id} file={file} onDelete={handleDeleteFile} />
+                <motion.div
+                  key={file.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Card className="group border-0 shadow-lg shadow-black/5 dark:shadow-black/20 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm hover:shadow-xl transition-shadow duration-300 h-full">
+                    <CardContent className="p-4 sm:p-6 flex flex-col h-full">
+                      {/* Top: icon + actions */}
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="flex-shrink-0">
+                            {getFileIcon(file.mimeType)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-foreground truncate" title={file.originalName}>
+                              {file.originalName}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {file.user?.username && (
+                                <span className="mr-2">por {file.user.username}</span>
+                              )}
+                              {formatDate(file.createdAt)}
+                            </p>
+                          </div>
+                        </div>
+                        {authToken && currentUser && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setDeleteTarget(file)}
+                            className="flex-shrink-0 text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 h-8 w-8"
+                            title="Eliminar archivo"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+
+                      {/* Badges */}
+                      <div className="flex items-center gap-2 mb-4 flex-wrap">
+                        <Badge variant="secondary" className="text-xs font-medium">
+                          {getFileExtension(file.originalName)}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {formatBytes(file.size)}
+                        </Badge>
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>{file.downloads}</span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="mt-auto flex items-center gap-2">
+                        <Button asChild className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm h-9">
+                          <a href={`/api/download/${file.shareId}`} download>
+                            <Download className="h-4 w-4 mr-1.5" />
+                            Descargar
+                          </a>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => handleCopyLink(file.shareId)}
+                          className="h-9 w-9 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"
+                          title="Copiar enlace"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
               ))}
             </AnimatePresence>
           </div>
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="mt-auto border-t bg-background/60 backdrop-blur-sm">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span>FileVault — Tu almacenamiento en la nube personal</span>
-          <span>Powered by Next.js</span>
+      {/* ──── Upload Dialog ──── */}
+      <Dialog open={uploadDialogOpen} onOpenChange={(open) => { setUploadDialogOpen(open); if (!open) { setUploadFiles([]); setUploadProgress({}); } }}>
+        <DialogContent className="sm:max-w-lg border-emerald-100 dark:border-emerald-900/50">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <CloudUpload className="h-5 w-5 text-emerald-600" />
+              Subir archivos
+            </DialogTitle>
+            <DialogDescription>
+              Selecciona los archivos que deseas subir al servidor.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-emerald-200 dark:border-emerald-800 rounded-xl p-8 text-center cursor-pointer hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+          >
+            <Upload className="h-10 w-10 text-emerald-400 mx-auto mb-3" />
+            <p className="text-sm font-medium text-foreground">
+              Haz clic para seleccionar archivos
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              o arrastra los archivos aquí
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) {
+                  setUploadFiles(Array.from(e.target.files));
+                }
+              }}
+            />
+          </div>
+
+          {/* File list */}
+          <AnimatePresence>
+            {uploadFiles.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="space-y-2 max-h-48 overflow-y-auto"
+              >
+                {uploadFiles.map((file, i) => {
+                  const progress = uploadProgress[file.name];
+                  const isDone = progress === 100;
+                  const isError = progress === -1;
+                  return (
+                    <div
+                      key={`${file.name}-${i}`}
+                      className="flex items-center gap-3 p-2 rounded-lg bg-muted/50"
+                    >
+                      <div className="flex-shrink-0">{getFileIcon(file.type)}</div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{file.name}</p>
+                        <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+                        {progress !== undefined && progress >= 0 && (
+                          <Progress value={progress} className="h-1.5 mt-1" />
+                        )}
+                      </div>
+                      {isDone && <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />}
+                      {isError && <X className="h-4 w-4 text-red-500 flex-shrink-0" />}
+                      {!uploading && (
+                        <button
+                          onClick={() => setUploadFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="text-muted-foreground hover:text-red-500 flex-shrink-0"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex justify-end gap-3 mt-2">
+            <Button
+              variant="outline"
+              onClick={() => setUploadDialogOpen(false)}
+              disabled={uploading}
+              className="border-emerald-200 dark:border-emerald-800"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleUpload}
+              disabled={uploadFiles.length === 0 || uploading}
+              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white"
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Subiendo...
+                </>
+              ) : (
+                <>
+                  <CloudUpload className="h-4 w-4 mr-2" />
+                  Subir {uploadFiles.length > 0 ? `(${uploadFiles.length})` : ''}
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ──── Delete Confirmation Dialog ──── */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent className="border-red-100 dark:border-red-900/50">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-red-500" />
+              Eliminar archivo
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ¿Estás seguro de que deseas eliminar{" "}
+              <span className="font-semibold text-foreground">"{deleteTarget?.originalName}"</span>?
+              Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Eliminando...
+                </>
+              ) : (
+                'Eliminar'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ──── Footer ──── */}
+      <footer className="relative z-10 mt-auto border-t border-emerald-100 dark:border-emerald-900/30 bg-white/50 dark:bg-gray-950/50 backdrop-blur-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Shield className="h-4 w-4 text-emerald-500" />
+            <span>FileVault v3.5</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Zap className="h-3.5 w-3.5 text-emerald-500" />
+            <span>Almacenamiento seguro y rápido</span>
+          </div>
         </div>
       </footer>
     </div>
   );
 }
 
-/* ──────────── Main Page ──────────── */
-export default function HomePage() {
-  const [view, setView] = useState<View>('auth');
-  const [user, setUser] = useState<User | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
-
-  useEffect(() => {
-    // Check for existing session
-    fetch('/api/auth/me')
-      .then((res) => {
-        if (res.ok) return res.json();
-        throw new Error('Not authenticated');
-      })
-      .then((data) => {
-        setUser(data.user);
-        setView('dashboard');
-      })
-      .catch(() => {
-        setView('auth');
-      })
-      .finally(() => setInitialLoading(false));
-  }, []);
-
-  const handleLogin = (loggedInUser: User) => {
-    setUser(loggedInUser);
-    setView('dashboard');
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setView('auth');
-  };
-
-  if (initialLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="text-center"
-        >
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-emerald-600 rounded-2xl mb-4 shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30">
-            <Cloud className="h-8 w-8 text-white" />
-          </div>
-          <p className="text-sm text-muted-foreground">Cargando...</p>
-        </motion.div>
-      </div>
-    );
-  }
-
+/* ──────────── Small search icon component ──────────── */
+function SearchIcon({ className }: { className?: string }) {
   return (
-    <AnimatePresence mode="wait">
-      {view === 'auth' ? (
-        <motion.div key="auth" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <AuthScreen onLogin={handleLogin} />
-        </motion.div>
-      ) : (
-        user && (
-          <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <Dashboard user={user} onLogout={handleLogout} />
-          </motion.div>
-        )
-      )}
-    </AnimatePresence>
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
   );
 }
