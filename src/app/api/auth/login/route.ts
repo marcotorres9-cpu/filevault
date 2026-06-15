@@ -42,13 +42,23 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json({
       user: { id: user.id, username: user.username },
+      token,
       message: 'Inicio de sesión exitoso.',
     });
 
+    // Set cookie with sameSite=none so WebView sends it with ALL methods (including DELETE)
     response.cookies.set('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: true,
+      sameSite: 'none',
+      maxAge: 60 * 60 * 24 * 7,
+      path: '/',
+    });
+    // Also set non-httpOnly copy for client-side access
+    response.cookies.set('fv_token', token, {
+      httpOnly: false,
+      secure: true,
+      sameSite: 'none',
       maxAge: 60 * 60 * 24 * 7,
       path: '/',
     });

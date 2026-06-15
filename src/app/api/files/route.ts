@@ -21,7 +21,40 @@ export async function GET() {
   }
 }
 
-// POST /api/files?action=delete&id=xxx — Auth required, any admin can delete
+// DELETE: Auth via cookie — for old cached client in WebView
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await getSession(request);
+    if (!session) {
+      return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const fileId = searchParams.get('id');
+    if (!fileId) {
+      return NextResponse.json({ error: 'ID de archivo requerido.' }, { status: 400 });
+    }
+
+    const file = await db.file.findUnique({ where: { id: fileId } });
+    if (!file) {
+      return NextResponse.json({ error: 'Archivo no encontrado.' }, { status: 404 });
+    }
+
+    try {
+      await deleteFromR2(file.r2Key);
+    } catch (r2Error) {
+      console.error('R2 delete error (continuing with DB delete):', r2Error);
+    }
+
+    await db.file.delete({ where: { id: fileId } });
+    return NextResponse.json({ message: 'Archivo eliminado.' });
+  } catch (error) {
+    console.error('DELETE error:', error);
+    return NextResponse.json({ error: 'Error al eliminar el archivo.' }, { status: 500 });
+  }
+}
+
+// POST /api/files?action=delete&id=xxx&token=xxx — for new client (WebView-safe)
 export async function POST(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
