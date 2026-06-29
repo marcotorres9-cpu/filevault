@@ -6,14 +6,14 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const filePath = path.join(process.cwd(), 'public', 'FileVault-v3.4.apk');
+    const filePath = path.join(process.cwd(), 'public', 'FileVault-v3.5.apk');
     const fileBuffer = await fs.readFile(filePath);
 
     return new NextResponse(fileBuffer, {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.android.package-archive',
-        'Content-Disposition': 'attachment; filename="FileVault-v3.4.apk"',
+        'Content-Disposition': 'attachment; filename="FileVault-v3.5.apk"',
         'Content-Length': fileBuffer.length.toString(),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
