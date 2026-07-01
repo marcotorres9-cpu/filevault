@@ -5,7 +5,7 @@ export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
   const cookieHeader = request.headers.get('cookie');
 
-  const session = await getSession(request);
+  const session = await getSession();
 
   return NextResponse.json({
     authHeader: authHeader ? authHeader.substring(0, 30) + '...' : 'NONE',

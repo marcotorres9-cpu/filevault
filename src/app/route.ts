@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://filevault-sigma.vercel.app';
-  return NextResponse.redirect(`${baseUrl}/app?v=35`, 307);
+  // Use NEXT_PUBLIC_APP_URL if set, otherwise redirect to /app on the current host.
+  // The previous hard-coded URL pointed to a stale Vercel project domain.
+  const explicitUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (explicitUrl) {
+    return NextResponse.redirect(`${explicitUrl}/app?v=35`, 307);
+  }
+  return NextResponse.redirect(`/app?v=35`, 307);
 }

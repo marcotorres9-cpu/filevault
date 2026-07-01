@@ -46,22 +46,22 @@ export async function POST(request: NextRequest) {
       message: 'Inicio de sesión exitoso.',
     });
 
-    // Set cookie with sameSite=none so WebView sends it with ALL methods (including DELETE)
-    response.cookies.set('token', token, {
+    // Cookie settings: lax works in WebView + cross-origin. secure only in production.
+    // This is the fix for "login no funciona bien para descargar/eliminar":
+    // sameSite=none+secure=true was being silently dropped by WebView on HTTP/preview URLs.
+    const isProd = process.env.NODE_ENV === 'production';
+    const cookieOpts = {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: isProd,
+      sameSite: 'lax' as const,
       maxAge: 60 * 60 * 24 * 7,
       path: '/',
-    });
-    // Also set non-httpOnly copy for client-side access
-    response.cookies.set('fv_token', token, {
-      httpOnly: false,
-      secure: true,
-      sameSite: 'none',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/',
-    });
+    };
+
+    // HttpOnly cookie for server-side auth (download, delete)
+    response.cookies.set('token', token, cookieOpts);
+    // Non-httpOnly copy so the client can read it for Bearer header / query param
+    response.cookies.set('fv_token', token, { ...cookieOpts, httpOnly: false });
 
     return response;
   } catch (error) {

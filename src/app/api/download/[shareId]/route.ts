@@ -26,11 +26,16 @@ export async function GET(
     const byteArray = await r2Response.Body!.transformToByteArray();
     const buffer = Buffer.from(byteArray);
 
+    // RFC 5987 Content-Disposition (same fix as authenticated download route)
+    const asciiName = file.originalName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, "'");
+    const utf8Name = encodeURIComponent(file.originalName);
+
     return new NextResponse(buffer, {
       headers: {
         'Content-Type': file.mimeType,
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(file.originalName)}"`,
+        'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
         'Content-Length': buffer.length.toString(),
+        'Cache-Control': 'private, no-store',
       },
     });
   } catch (error) {

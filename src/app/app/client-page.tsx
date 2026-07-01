@@ -155,7 +155,6 @@ export default function AppClient() {
   return (
     <div style={{
       minHeight: '100vh',
-      minHeight: '100dvh',
       background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
       color: '#e2e8f0',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',

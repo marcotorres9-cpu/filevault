@@ -79,26 +79,49 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const fileId = searchParams.get('id');
 
-    if (!fileId) {
-      // Try reading from body as fallback
-      let bodyId = null;
+    let idToDelete: string | null = fileId;
+
+    // If no id in query, try reading from body as fallback
+    if (!idToDelete) {
       try {
         const body = await request.json();
-        bodyId = body.id;
+        if (body && typeof body.id === 'string') {
+          idToDelete = body.id;
+        }
       } catch {}
-      if (!bodyId) {
-        return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
-      }
     }
 
-    const idToDelete = fileId || bodyId;
-    const file = await db.file.findUnique({ where: { id: idToDelete! } });
+    if (!idToDelete) {
+      return NextResponse.json({ error: 'ID requerido.' }, { status: 400 });
+    }
+
+    // Verify auth (cookie or token query param)
+    let isAuthenticated = false;
+    const queryToken = searchParams.get('token');
+    if (queryToken) {
+      const payload = await verifyToken(queryToken);
+      if (payload) isAuthenticated = true;
+    }
+    if (!isAuthenticated) {
+      const { cookies } = await import('next/headers');
+      const cookieStore = await cookies();
+      const cookieToken = cookieStore.get('token')?.value || cookieStore.get('fv_token')?.value;
+      if (cookieToken) {
+        const payload = await verifyToken(cookieToken);
+        if (payload) isAuthenticated = true;
+      }
+    }
+    if (!isAuthenticated) {
+      return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
+    }
+
+    const file = await db.file.findUnique({ where: { id: idToDelete } });
     if (!file) {
       return NextResponse.json({ error: 'No encontrado.' }, { status: 404 });
     }
 
     try { await deleteFromR2(file.r2Key); } catch (e) { console.error('R2:', e); }
-    await db.file.delete({ where: { id: idToDelete! } });
+    await db.file.delete({ where: { id: idToDelete } });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('DELETE error:', error);

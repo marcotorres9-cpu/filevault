@@ -43,20 +43,17 @@ export async function POST(request: NextRequest) {
       message: 'Cuenta creada exitosamente.',
     });
 
-    response.cookies.set('token', token, {
+    const isProd = process.env.NODE_ENV === 'production';
+    const cookieOpts = {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: isProd,
+      sameSite: 'lax' as const,
       maxAge: 60 * 60 * 24 * 7,
       path: '/',
-    });
-    response.cookies.set('fv_token', token, {
-      httpOnly: false,
-      secure: true,
-      sameSite: 'none',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/',
-    });
+    };
+
+    response.cookies.set('token', token, cookieOpts);
+    response.cookies.set('fv_token', token, { ...cookieOpts, httpOnly: false });
 
     return response;
   } catch (error) {
