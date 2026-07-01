@@ -1,11 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET() {
-  // Use NEXT_PUBLIC_APP_URL if set, otherwise redirect to /app on the current host.
-  // The previous hard-coded URL pointed to a stale Vercel project domain.
-  const explicitUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (explicitUrl) {
-    return NextResponse.redirect(`${explicitUrl}/app?v=35`, 307);
-  }
-  return NextResponse.redirect(`/app?v=35`, 307);
+export async function GET(request: NextRequest) {
+  // Build absolute URL for redirect (Vercel requires absolute URLs)
+  // Fix: previous version used relative path '/app' which threw 500 in production
+  const url = new URL('/app?v=35', request.url);
+  return NextResponse.redirect(url, 307);
 }
