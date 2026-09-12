@@ -388,7 +388,9 @@ export default function AppClient() {
 
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                  <a href={'/api/files/' + file.id + '/download'} style={{
+                  <a href={token
+                      ? '/api/files/' + file.id + '/download?token=' + encodeURIComponent(token)
+                      : '/api/download/' + file.shareId} style={{
                     padding: 'clamp(6px, 1.2vw, 8px) clamp(10px, 2vw, 14px)',
                     background: '#1d4ed8', color: '#fff', borderRadius: '8px',
                     fontSize: 'clamp(11px, 2.5vw, 13px)', fontWeight: '600',
