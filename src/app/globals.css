@@ -120,3 +120,29 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Barra de descarga indeterminada (TV/WebView: el progreso real lo lleva
+   el DownloadManager de Android, aqui solo se indica actividad) */
+@keyframes fv-dl-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.fv-dl-track {
+  position: relative;
+  overflow: hidden;
+  background: #1e3a5f;
+  border-radius: 4px;
+  height: 100%;
+  width: 100%;
+}
+.fv-dl-track::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 25%;
+  background: #3b82f6;
+  border-radius: 4px;
+  animation: fv-dl-slide 1.1s ease-in-out infinite;
+}

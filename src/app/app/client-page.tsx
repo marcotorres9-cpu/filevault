@@ -40,6 +40,7 @@ export default function AppClient() {
   const [message, setMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -114,6 +115,31 @@ export default function AppClient() {
       }
     } catch { showMsg('err', 'Error de conexion'); }
     finally { setDeletingId(null); }
+  };
+
+  const handleDownload = (file: FileItem) => {
+    // Evita descargas duplicadas por toques repetidos (tipico en TV)
+    if (downloadingId) return;
+    setDownloadingId(file.id);
+    showMsg('ok', 'Descargando "' + file.originalName + '"... no toques de nuevo, espera el aviso');
+    const url = token
+      ? '/api/files/' + file.id + '/download?token=' + encodeURIComponent(token)
+      : '/api/download/' + file.shareId;
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      showMsg('ok', '"' + file.originalName + '" enviado a tu carpeta Descargas');
+      setDownloadingId(null);
+      setTimeout(() => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 10000);
+    };
+    iframe.onload = finish;
+    iframe.onerror = finish;
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    setTimeout(finish, 15000); // red de seguridad si el iframe nunca dispara load
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -388,16 +414,26 @@ export default function AppClient() {
 
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                  <a href={token
-                      ? '/api/files/' + file.id + '/download?token=' + encodeURIComponent(token)
-                      : '/api/download/' + file.shareId} style={{
-                    padding: 'clamp(6px, 1.2vw, 8px) clamp(10px, 2vw, 14px)',
-                    background: '#1d4ed8', color: '#fff', borderRadius: '8px',
-                    fontSize: 'clamp(11px, 2.5vw, 13px)', fontWeight: '600',
-                    textDecoration: 'none', display: 'inline-block',
-                  }}>
-                    Descargar
-                  </a>
+                  {downloadingId === file.id ? (
+                    <div style={{
+                      width: 'clamp(90px, 18vw, 120px)', height: '26px',
+                      display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '3px',
+                    }}>
+                      <div className="fv-dl-track" />
+                      <span style={{ fontSize: '10px', color: '#93c5fd', fontWeight: '600', textAlign: 'center' }}>
+                        Descargando...
+                      </span>
+                    </div>
+                  ) : (
+                    <button onClick={() => handleDownload(file)} style={{
+                      padding: 'clamp(6px, 1.2vw, 8px) clamp(10px, 2vw, 14px)',
+                      background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: '8px',
+                      fontSize: 'clamp(11px, 2.5vw, 13px)', fontWeight: '600',
+                      cursor: 'pointer', display: 'inline-block',
+                    }}>
+                      Descargar
+                    </button>
+                  )}
                   {token && (
                     <button onClick={() => handleDelete(file.id, file.originalName)}
                       disabled={deletingId === file.id} style={{
