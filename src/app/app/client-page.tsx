@@ -181,6 +181,14 @@ export default function AppClient() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <a href="/apk" style={{
+            background: '#334155', color: '#e2e8f0', textDecoration: 'none',
+            padding: 'clamp(6px, 1.5vw, 8px) clamp(10px, 2vw, 16px)', borderRadius: '8px',
+            cursor: 'pointer', fontSize: 'clamp(12px, 2.5vw, 14px)', fontWeight: '600',
+            display: 'inline-block', border: '1px solid #475569',
+          }}>
+            Descargar APK
+          </a>
           {token ? (
             <>
               <span style={{
