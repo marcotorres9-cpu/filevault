@@ -3,6 +3,9 @@ import { db } from '@/lib/db';
 import { getFromR2 } from '@/lib/r2';
 import { verifyToken } from '@/lib/auth';
 
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -43,10 +46,11 @@ export async function GET(
       data: { downloads: { increment: 1 } },
     });
 
-    // Get file from R2 as buffer
+    // Stream del blob publico (sin cargar todo en memoria)
     const r2Response = await getFromR2(file.r2Key);
-    const byteArray = await r2Response.Body!.transformToByteArray();
-    const buffer = Buffer.from(byteArray);
+    if (!r2Response.ok) {
+      return NextResponse.json({ error: 'Archivo no encontrado en el storage.' }, { status: 404 });
+    }
 
     // RFC 5987 Content-Disposition — both ASCII fallback and UTF-8 encoded filename
     // Fix for "archivos se descargan con nombre genérico":
@@ -55,11 +59,11 @@ export async function GET(
     const asciiName = file.originalName.replace(/[^\x20-\x7E]+/g, '_').replace(/"/g, "'");
     const utf8Name = encodeURIComponent(file.originalName);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(r2Response.body, {
       headers: {
-        'Content-Type': file.mimeType,
+        'Content-Type': file.mimeType || r2Response.headers.get('content-type') || 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`,
-        'Content-Length': buffer.length.toString(),
+        'Content-Length': String(file.size),
         'Cache-Control': 'private, no-store',
       },
     });

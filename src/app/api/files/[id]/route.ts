@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getSession } from '@/lib/auth';
+import { getSession, verifyToken } from '@/lib/auth';
 import { deleteFromR2 } from '@/lib/r2';
 
 export async function DELETE(
@@ -8,7 +8,19 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getSession();
+    // Auth robusta para WebView: cookie, Authorization Bearer o ?token=
+    let session = await getSession();
+    if (!session) {
+      const authHeader = request.headers.get('authorization');
+      if (authHeader?.startsWith('Bearer ')) {
+        session = await verifyToken(authHeader.slice(7));
+      }
+      if (!session) {
+        const { searchParams } = new URL(request.url);
+        const q = searchParams.get('token');
+        if (q) session = await verifyToken(q);
+      }
+    }
     if (!session) {
       return NextResponse.json({ error: 'No autenticado.' }, { status: 401 });
     }
