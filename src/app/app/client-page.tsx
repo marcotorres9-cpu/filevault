@@ -4,8 +4,15 @@ import { useState, useEffect, useRef } from 'react';
 
 declare global {
   interface Window {
-    FvAndroid?: { isApp?: () => boolean; version?: () => string };
-    __fvDlNative?: (p: { state: 'start' | 'progress' | 'done' | 'error'; name?: string; got?: number; total?: number }) => void;
+    FvAndroid?: {
+      isApp?: () => boolean;
+      version?: () => string;
+      saveStart?: (name: string, mime: string) => number;
+      saveChunk?: (sid: number, b64: string) => boolean;
+      saveEnd?: (sid: number) => boolean;
+      saveAbort?: (sid: number) => void;
+    };
+    __fvDlNative?: (p: { state: 'start' | 'progress' | 'done' | 'saved' | 'error'; name?: string; got?: number; total?: number }) => void;
   }
 }
 
@@ -42,6 +49,30 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('es-EC', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Une trozos del stream en un solo buffer (para enviarlo al APK v5.2). */
+function mergeChunks(parts: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (let i = 0; i < parts.length; i++) { out.set(parts[i], off); off += parts[i].length; }
+  return out;
+}
+
+/** Bytes -> base64 (sin el prefijo data:) para el puente nativo. */
+function b64Of(bytes: Uint8Array): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const s = String(fr.result || '');
+        const i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      fr.onerror = () => reject(new Error('b64'));
+      fr.readAsDataURL(new Blob([bytes as unknown as BlobPart]));
+    } catch (e) { reject(e instanceof Error ? e : new Error('b64')); }
+  });
+}
+
 export default function AppClient() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +96,7 @@ export default function AppClient() {
   const dlGenRef = useRef(0);
   const dlActivityRef = useRef(0);      // ultima senal de descarga (nativa o web)
   const dlNativeSeenRef = useRef(false); // si el APK ya reporto algo (puente v5+)
+  const dlPhaseRef = useRef<DlPhase | null>(null); // fase actual (lectura sincrona para el puente)
 
   useEffect(() => {
     const saved = localStorage.getItem('fv_token');
@@ -88,6 +120,9 @@ export default function AppClient() {
 
   useEffect(() => { loadFiles(); }, []);
 
+  // Espejo sincrono de la fase de descarga (para decisiones del puente nativo)
+  useEffect(() => { dlPhaseRef.current = dl ? dl.phase : null; }, [dl]);
+
   // Puente con el APK nativo (FileVault v5.0+): el app reporta inicio/progreso/fin
   // de cada descarga del DownloadManager y la pagina muestra la barra real.
   useEffect(() => {
@@ -96,17 +131,29 @@ export default function AppClient() {
       dlNativeSeenRef.current = true;
       dlActivityRef.current = Date.now();
       if (p.state === 'start') {
+        // Segunda pasada (guardado del archivo ya descargado): no reiniciar el cuadro
+        if (dlPhaseRef.current === 'saving' || dlPhaseRef.current === 'done') return;
         dlGenRef.current += 1;
         dlLockRef.current = true;
         setDownloadingId(null);
         setDl({ name: p.name || 'archivo', pct: 0, got: 0, total: p.total && p.total > 0 ? p.total : null, phase: 'downloading' });
       } else if (p.state === 'progress') {
+        // Durante el guardado (2da pasada) el progreso nativo no se muestra
+        if (dlPhaseRef.current === 'saving' || dlPhaseRef.current === 'done' || dlPhaseRef.current === 'background') return;
         setDl(prev => {
           if (!prev) return prev;
           const total = p.total && p.total > 0 ? p.total : prev.total;
           const got = Math.max(prev.got, p.got || 0);
           return { ...prev, phase: 'downloading', got, total, pct: total ? Math.min(99, Math.round((got / total) * 100)) : null };
         });
+      } else if (p.state === 'saved') {
+        // APK v5.2 confirmo que el archivo quedo en "Descargas"
+        dlTimersRef.current.forEach(clearTimeout);
+        dlTimersRef.current = [];
+        setDl(prev => prev && prev.phase === 'saving' ? { ...prev, phase: 'done', pct: 100, got: p.got || prev.got, hint: undefined } : prev);
+        setDownloadingId(null);
+        dlTimersRef.current.push(setTimeout(() => { dlLockRef.current = false; setDl(null); }, 8000));
+        loadFiles();
       } else if (p.state === 'done') {
         dlTimersRef.current.forEach(clearTimeout);
         dlTimersRef.current = [];
@@ -185,6 +232,8 @@ export default function AppClient() {
     }
     dlGenRef.current += 1;
     const gen = dlGenRef.current;
+    dlTimersRef.current.forEach(clearTimeout); // limpia temporizadores de una descarga anterior
+    dlTimersRef.current = [];
     dlLockRef.current = true;
     dlActivityRef.current = Date.now();
     dlNativeSeenRef.current = false;
@@ -217,37 +266,169 @@ export default function AppClient() {
       document.body.appendChild(f);
     };
 
-    // APK Android (WebView) o archivo muy grande: la descarga la gestiona el
-    // DownloadManager del sistema; la pagina muestra aviso + barra de actividad.
-    // Con el APK v5.0 el app reporta el progreso real via __fvDlNative.
+    // APK Android (WebView) o archivo muy grande en escritorio.
     const inApk = !!(window.FvAndroid && typeof window.FvAndroid.isApp === 'function' && window.FvAndroid.isApp());
     const inWebview = inApk || /;\s*wv\)/.test(navigator.userAgent);
-    if (inWebview || file.size > 250 * 1048576) {
-      setDl({ name: file.originalName, pct: null, got: 0, total: file.size || null, phase: 'starting' });
-      openNativeIframe();
-      // APK v5 reporta el inicio via __fvDlNative. Si en 10s no llego nada, es un
-      // APK viejo (v4, sin puente): barra de actividad + consejo de actualizar.
+    const fv = inWebview ? window.FvAndroid : undefined;
+    const canNativeSave = !!(fv && typeof fv.saveStart === 'function' && typeof fv.saveChunk === 'function' && typeof fv.saveEnd === 'function');
+
+    // Red anti-colgado para el flujo ciego (DownloadManager sin avisos nativos)
+    const armBlindWatchdog = () => {
       later(() => {
-        setDl(prev => (prev && prev.phase === 'starting') ? { ...prev, phase: 'downloading' } : prev);
-        if (!dlNativeSeenRef.current) {
-          setDl(prev => prev && !prev.hint
-            ? { ...prev, hint: 'Consejo: actualiza tu app con el boton "Descargar APK" (arriba) y podras ver el porcentaje real.' }
-            : prev);
-        }
-      }, 10000);
-      // Red de seguridad ANTI-COLGADO: si a los 45s no hay ninguna senal reciente
-      // (APK v4 o sondeo nativo caido), la descarga sigue en el DownloadManager del
-      // sistema: se avisa, se libera el bloqueo y se cierra solo. NUNCA se queda colgado.
-      later(() => {
-        if (Date.now() - dlActivityRef.current < 40000) return; // el APK esta reportando
+        if (dlGenRef.current !== gen) return;
+        if (Date.now() - dlActivityRef.current < 40000) return; // hay senal reciente
         setDl(prev => (prev && (prev.phase === 'starting' || prev.phase === 'downloading'))
           ? { ...prev, phase: 'background', pct: null } : prev);
         dlLockRef.current = false;
         setDownloadingId(null);
         later(() => {
+          if (dlGenRef.current !== gen) return;
           setDl(prev => (prev && prev.phase === 'background') ? null : prev);
         }, 12000);
       }, 45000);
+    };
+    // Fallback ciego: si el stream fallo, deja que el DownloadManager lo descargue
+    const startBlind = () => {
+      setDl(prev => prev ? { ...prev, phase: 'downloading', pct: null, got: 0 } : prev);
+      dlActivityRef.current = Date.now();
+      openNativeIframe();
+      armBlindWatchdog();
+    };
+
+    if (!inWebview && file.size > 250 * 1048576) {
+      // Escritorio con archivo enorme: descarga directa del navegador
+      setDl({ name: file.originalName, pct: null, got: 0, total: file.size || null, phase: 'starting' });
+      openNativeIframe();
+      later(() => {
+        setDl(prev => (prev && prev.phase === 'starting') ? { ...prev, phase: 'downloading' } : prev);
+      }, 10000);
+      armBlindWatchdog();
+      return;
+    }
+
+    // ---------- CAMINO 1: APK v5.2 — % real + guardado en UNA sola pasada ----------
+    if (inWebview && canNativeSave) {
+      const f2 = fv as NonNullable<typeof fv>;
+      setDl({ name: file.originalName, pct: 0, got: 0, total: file.size || null, phase: 'downloading' });
+      (async () => {
+        let sid = 0;
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          if (!res.body) throw new Error('stream no disponible');
+          const lenHeader = Number(res.headers.get('content-length'));
+          const total = lenHeader && lenHeader > 0 ? lenHeader : (file.size || null);
+          setDl(prev => prev ? { ...prev, total } : prev);
+          sid = f2.saveStart!(file.originalName, file.mimeType || 'application/octet-stream');
+          if (!sid || sid < 0) throw new Error('saveStart');
+          const reader = res.body.getReader();
+          let got = 0;
+          let buf: Uint8Array[] = [];
+          let bufLen = 0;
+          const flushBuf = async () => {
+            if (bufLen === 0) return;
+            const merged = mergeChunks(buf, bufLen);
+            buf = []; bufLen = 0;
+            const b64 = await b64Of(merged);
+            if (!(f2.saveChunk!(sid, b64))) throw new Error('saveChunk');
+          };
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value && value.length) {
+              buf.push(value); bufLen += value.length; got += value.length;
+              dlActivityRef.current = Date.now();
+              if (dlGenRef.current === gen) {
+                setDl(prev => prev ? { ...prev, got, pct: total ? Math.min(99, Math.round((got / total) * 100)) : null } : prev);
+              }
+              if (bufLen >= 524288) await flushBuf();
+            }
+          }
+          await flushBuf();
+          if (dlGenRef.current !== gen) { try { f2.saveAbort!(sid); } catch {} return; }
+          setDl(prev => prev ? { ...prev, phase: 'saving', pct: 100 } : prev);
+          if (!(f2.saveEnd!(sid))) throw new Error('saveEnd');
+          // El nativo confirma con __fvDlNative({state:'saved'}); red por si no llega:
+          later(() => {
+            if (dlGenRef.current !== gen) return;
+            setDl(prev => (prev && prev.phase === 'saving') ? { ...prev, phase: 'done', hint: undefined } : prev);
+            later(() => { dlLockRef.current = false; setDl(prev => (prev && prev.phase === 'done') ? null : prev); }, 8000);
+          }, 20000);
+        } catch {
+          try { if (sid > 0) f2.saveAbort!(sid); } catch {}
+          if (dlGenRef.current !== gen) return;
+          startBlind();
+        }
+      })();
+      return;
+    }
+
+    // ---------- CAMINO 2: APK vieja (v4/v5.0/v5.1) — % REAL en la pagina; al
+    // 100% el DownloadManager guarda el archivo (2da pasada, ya desde cache) ----------
+    if (inWebview && file.size <= 150 * 1048576) {
+      setDl({
+        name: file.originalName, pct: 0, got: 0, total: file.size || null, phase: 'downloading',
+        hint: 'Al llegar al 100% tu dispositivo guarda el archivo en "Descargas". Actualiza la app ("Descargar APK") y sera en una sola pasada.',
+      });
+      (async () => {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          if (!res.body) throw new Error('stream no disponible');
+          const lenHeader = Number(res.headers.get('content-length'));
+          const total = lenHeader && lenHeader > 0 ? lenHeader : (file.size || null);
+          setDl(prev => prev ? { ...prev, total } : prev);
+          const reader = res.body.getReader();
+          let got = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value && value.length) {
+              got += value.length;
+              dlActivityRef.current = Date.now();
+              if (dlGenRef.current === gen) {
+                setDl(prev => prev ? { ...prev, got, pct: total ? Math.min(99, Math.round((got / total) * 100)) : null } : prev);
+              }
+            }
+          }
+          if (dlGenRef.current !== gen) return;
+          // 100% real alcanzado: ahora si guardar en Descargas
+          setDl(prev => prev ? { ...prev, phase: 'saving', pct: 100 } : prev);
+          dlActivityRef.current = Date.now();
+          openNativeIframe();
+          later(() => {
+            if (dlGenRef.current !== gen) return;
+            if (Date.now() - dlActivityRef.current < 65000) return; // nativo sigue reportando
+            setDl(prev => (prev && prev.phase === 'saving')
+              ? { ...prev, phase: 'background', hint: undefined } : prev);
+            dlLockRef.current = false;
+            setDownloadingId(null);
+            later(() => {
+              if (dlGenRef.current !== gen) return;
+              setDl(prev => (prev && prev.phase === 'background') ? null : prev);
+            }, 12000);
+          }, 70000);
+        } catch {
+          if (dlGenRef.current !== gen) return;
+          startBlind();
+        }
+      })();
+      return;
+    }
+
+    // ---------- CAMINO 3: APK vieja + archivo muy grande: descarga directa ----------
+    if (inWebview) {
+      setDl({ name: file.originalName, pct: null, got: 0, total: file.size || null, phase: 'starting' });
+      openNativeIframe();
+      later(() => {
+        setDl(prev => (prev && prev.phase === 'starting') ? { ...prev, phase: 'downloading' } : prev);
+        if (!dlNativeSeenRef.current) {
+          setDl(prev => prev && !prev.hint
+            ? { ...prev, hint: 'Archivo grande: descarga directa. Actualiza tu app ("Descargar APK") para ver el porcentaje real.' }
+            : prev);
+        }
+      }, 10000);
+      armBlindWatchdog();
       return;
     }
 
@@ -477,7 +658,7 @@ export default function AppClient() {
               {dl.phase === 'done' && 'El archivo se guardo en tu carpeta "Descargas".'}
               {dl.phase === 'error' && 'No se pudo descargar. Vuelve a intentarlo.'}
               {dl.phase === 'background' && 'Tu dispositivo sigue guardando el archivo en la carpeta "Descargas". Puedes usar la app con normalidad; si todavia no aparece, espera un momento y revisa esa carpeta.'}
-              {dl.phase === 'saving' && 'Preparando el archivo para guardarlo...'}
+              {dl.phase === 'saving' && 'Guardando el archivo en tu carpeta "Descargas"...'}
               {dl.phase === 'starting' && 'Conectando con el servidor...'}
               {dl.phase === 'downloading' && (
                 dl.pct !== null

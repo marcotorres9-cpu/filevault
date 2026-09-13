@@ -14,14 +14,14 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   try {
     const inline = request.nextUrl.searchParams.get('inline') === '1';
-    const filePath = path.join(process.cwd(), 'public', 'FileVault-v5.1.apk');
+    const filePath = path.join(process.cwd(), 'public', 'FileVault-v5.2.apk');
     const fileBuffer = await fs.readFile(filePath);
 
     return new NextResponse(new Uint8Array(fileBuffer), {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.android.package-archive',
-        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="FileVault-v5.1.apk"`,
+        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="FileVault-v5.2.apk"`,
         'Content-Length': fileBuffer.length.toString(),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
