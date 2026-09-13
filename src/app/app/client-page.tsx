@@ -2,6 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 
+declare global {
+  interface Window {
+    FvAndroid?: { isApp?: () => boolean; version?: () => string };
+    __fvDlNative?: (p: { state: 'start' | 'progress' | 'done' | 'error'; name?: string; got?: number; total?: number }) => void;
+  }
+}
+
 interface FileItem {
   id: string;
   originalName: string;
@@ -11,6 +18,15 @@ interface FileItem {
   downloads: number;
   createdAt: string;
   user?: { username: string };
+}
+
+type DlPhase = 'starting' | 'downloading' | 'saving' | 'done' | 'error';
+interface DlState {
+  name: string;
+  pct: number | null;
+  got: number;
+  total: number | null;
+  phase: DlPhase;
 }
 
 function formatSize(bytes: number): string {
@@ -41,7 +57,11 @@ export default function AppClient() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [dl, setDl] = useState<DlState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dlLockRef = useRef(false);
+  const dlTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const dlGenRef = useRef(0);
 
   useEffect(() => {
     const saved = localStorage.getItem('fv_token');
@@ -64,6 +84,41 @@ export default function AppClient() {
   };
 
   useEffect(() => { loadFiles(); }, []);
+
+  // Puente con el APK nativo (FileVault v5.0+): el app reporta inicio/progreso/fin
+  // de cada descarga del DownloadManager y la pagina muestra la barra real.
+  useEffect(() => {
+    window.__fvDlNative = (p) => {
+      if (!p || typeof p !== 'object') return;
+      if (p.state === 'start') {
+        dlGenRef.current += 1;
+        dlLockRef.current = true;
+        setDownloadingId(null);
+        setDl({ name: p.name || 'archivo', pct: 0, got: 0, total: p.total && p.total > 0 ? p.total : null, phase: 'downloading' });
+      } else if (p.state === 'progress') {
+        setDl(prev => {
+          if (!prev) return prev;
+          const total = p.total && p.total > 0 ? p.total : prev.total;
+          const got = Math.max(prev.got, p.got || 0);
+          return { ...prev, phase: 'downloading', got, total, pct: total ? Math.min(99, Math.round((got / total) * 100)) : null };
+        });
+      } else if (p.state === 'done') {
+        dlTimersRef.current.forEach(clearTimeout);
+        dlTimersRef.current = [];
+        setDl(prev => prev ? { ...prev, phase: 'done', pct: 100, got: p.got || prev.got } : prev);
+        setDownloadingId(null);
+        dlTimersRef.current.push(setTimeout(() => { dlLockRef.current = false; setDl(null); }, 6000));
+        loadFiles();
+      } else if (p.state === 'error') {
+        dlTimersRef.current.forEach(clearTimeout);
+        dlTimersRef.current = [];
+        setDl(prev => prev ? { ...prev, phase: 'error' } : prev);
+        setDownloadingId(null);
+        dlTimersRef.current.push(setTimeout(() => { dlLockRef.current = false; setDl(null); }, 8000));
+      }
+    };
+    return () => { try { delete window.__fvDlNative; } catch {} };
+  }, []);
 
   const showMsg = (type: 'ok' | 'err', text: string) => {
     setMessage({ type, text });
@@ -118,28 +173,113 @@ export default function AppClient() {
   };
 
   const handleDownload = (file: FileItem) => {
-    // Evita descargas duplicadas por toques repetidos (tipico en TV)
-    if (downloadingId) return;
+    // Bloqueo duro: una sola descarga a la vez (evita duplicados por toques repetidos en TV)
+    if (dlLockRef.current) {
+      showMsg('err', 'Ya hay una descarga en curso. Espera el aviso de "Descarga completa".');
+      return;
+    }
+    dlGenRef.current += 1;
+    const gen = dlGenRef.current;
+    dlLockRef.current = true;
     setDownloadingId(file.id);
-    showMsg('ok', 'Descargando "' + file.originalName + '"... no toques de nuevo, espera el aviso');
+
     const url = token
       ? '/api/files/' + file.id + '/download?token=' + encodeURIComponent(token)
       : '/api/download/' + file.shareId;
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      showMsg('ok', '"' + file.originalName + '" enviado a tu carpeta Descargas');
+
+    const closeDl = () => {
+      dlTimersRef.current.forEach(clearTimeout);
+      dlTimersRef.current = [];
+      dlLockRef.current = false;
       setDownloadingId(null);
-      setTimeout(() => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 10000);
+      setDl(null);
     };
-    iframe.onload = finish;
-    iframe.onerror = finish;
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    setTimeout(finish, 15000); // red de seguridad si el iframe nunca dispara load
+    const later = (fn: () => void, ms: number) => { dlTimersRef.current.push(setTimeout(fn, ms)); };
+    const finishOk = () => {
+      setDl(prev => prev ? { ...prev, phase: 'done', pct: 100 } : prev);
+      setDownloadingId(null);
+      later(() => { dlLockRef.current = false; setDl(null); }, 6000);
+    };
+    const refreshFiles = () => {
+      fetch('/api/files').then(r => r.json()).then(d => { if (d.files) setFiles(d.files); }).catch(() => {});
+    };
+    const openNativeIframe = () => {
+      const f = document.createElement('iframe');
+      f.style.display = 'none';
+      f.src = url;
+      document.body.appendChild(f);
+    };
+
+    // APK Android (WebView) o archivo muy grande: la descarga la gestiona el
+    // DownloadManager del sistema; la pagina muestra aviso + barra de actividad.
+    // Con el APK v5.0 el app reporta el progreso real via __fvDlNative.
+    const inApk = !!(window.FvAndroid && typeof window.FvAndroid.isApp === 'function' && window.FvAndroid.isApp());
+    const inWebview = inApk || /;\s*wv\)/.test(navigator.userAgent);
+    if (inWebview || file.size > 250 * 1048576) {
+      setDl({ name: file.originalName, pct: null, got: 0, total: file.size || null, phase: 'starting' });
+      openNativeIframe();
+      // Si en 12s el app no confirmo (APK v4 sin puente), pasa a barra de actividad
+      later(() => {
+        setDl(prev => (prev && prev.phase === 'starting') ? { ...prev, phase: 'downloading' } : prev);
+      }, 12000);
+      // Red de seguridad (APK v4 sin avisos): liberar a los 3 min
+      later(() => {
+        setDl(prev => {
+          if (prev && prev.phase !== 'done' && prev.phase !== 'error' && prev.got === 0) {
+            return { ...prev, phase: 'done', pct: 100 };
+          }
+          return prev;
+        });
+        later(() => { dlLockRef.current = false; setDl(null); }, 6000);
+      }, 180000);
+      return;
+    }
+
+    // Navegador normal: descarga por stream con progreso real (% y MB)
+    setDl({ name: file.originalName, pct: 0, got: 0, total: file.size || null, phase: 'downloading' });
+    (async () => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const lenHeader = Number(res.headers.get('content-length'));
+        const total = lenHeader && lenHeader > 0 ? lenHeader : (file.size || null);
+        if (!res.body) throw new Error('stream no disponible');
+        setDl(prev => prev ? { ...prev, total } : prev);
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.length) {
+            chunks.push(value);
+            got += value.length;
+            if (dlGenRef.current === gen) {
+              setDl(prev => prev ? { ...prev, got, pct: total ? Math.min(99, Math.round((got / total) * 100)) : null } : prev);
+            }
+          }
+        }
+        if (dlGenRef.current !== gen) return; // otra descarga tomo el control
+        setDl(prev => prev ? { ...prev, phase: 'saving', pct: 100 } : prev);
+        const blob = new Blob(chunks as unknown as BlobPart[]);
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = file.originalName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+        finishOk();
+        refreshFiles();
+      } catch {
+        // Sin stream o error: deja que el navegador/WebView descargue por su cuenta
+        if (dlGenRef.current !== gen) return;
+        setDl(prev => prev ? { ...prev, phase: 'downloading', pct: null } : prev);
+        openNativeIframe();
+        later(finishOk, 25000);
+      }
+    })();
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -263,6 +403,95 @@ export default function AppClient() {
           border: '1px solid ' + (message.type === 'ok' ? '#166534' : '#991b1b'),
         }}>
           {message.text}
+        </div>
+      )}
+
+      {/* Overlay de descarga: barra de progreso + avisos (bloquea toques repetidos) */}
+      {dl && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(2,6,23,0.82)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1200, padding: '16px',
+        }}>
+          <div style={{
+            background: '#1e293b', border: '1px solid #334155', borderRadius: '14px',
+            padding: 'clamp(18px, 4vw, 26px)', width: '100%', maxWidth: '430px',
+            boxShadow: '0 12px 48px rgba(0,0,0,0.55)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+              <div style={{
+                width: '42px', height: '42px', borderRadius: '11px', flexShrink: 0,
+                background: dl.phase === 'done' ? '#166534' : dl.phase === 'error' ? '#7f1d1d' : '#1d4ed8',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '20px', color: '#fff', fontWeight: 'bold',
+              }}>
+                {dl.phase === 'done' ? '\u2713' : dl.phase === 'error' ? '!' : '\u2193'}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 'clamp(16px, 3.5vw, 18px)', fontWeight: 'bold', color: '#f8fafc' }}>
+                  {dl.phase === 'done' ? 'Descarga completa'
+                    : dl.phase === 'error' ? 'Error en la descarga'
+                    : dl.phase === 'saving' ? 'Guardando archivo...'
+                    : dl.phase === 'starting' ? 'Iniciando descarga...'
+                    : 'Descargando...'}
+                </div>
+                <div style={{ fontSize: 'clamp(13px, 3vw, 14px)', color: '#93c5fd', fontWeight: '600', overflowWrap: 'anywhere' }}>
+                  {dl.name}
+                </div>
+              </div>
+            </div>
+
+            {dl.phase !== 'done' && dl.phase !== 'error' && (
+              <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '7px', height: '16px', overflow: 'hidden' }}>
+                {dl.pct !== null ? (
+                  <div style={{
+                    background: 'linear-gradient(90deg, #1d4ed8, #3b82f6)', height: '100%',
+                    width: Math.max(3, dl.pct) + '%', transition: 'width 0.25s', borderRadius: '7px',
+                  }} />
+                ) : (
+                  <div className="fv-dl-indeterminate" style={{
+                    background: 'linear-gradient(90deg, #1d4ed8, #3b82f6)', height: '100%', width: '40%', borderRadius: '7px',
+                  }} />
+                )}
+              </div>
+            )}
+
+            <div style={{ marginTop: '12px', fontSize: 'clamp(14px, 3vw, 15px)', color: '#e2e8f0', fontWeight: '600' }}>
+              {dl.phase === 'done' && 'El archivo se guardo en tu carpeta "Descargas".'}
+              {dl.phase === 'error' && 'No se pudo descargar. Vuelve a intentarlo.'}
+              {dl.phase === 'saving' && 'Preparando el archivo para guardarlo...'}
+              {dl.phase === 'starting' && 'Conectando con el servidor...'}
+              {dl.phase === 'downloading' && (
+                dl.pct !== null
+                  ? dl.pct + '% \u2014 ' + formatSize(dl.got) + (dl.total ? ' de ' + formatSize(dl.total) : '')
+                  : dl.got > 0
+                    ? formatSize(dl.got) + ' descargados...'
+                    : 'Descargando en tu dispositivo' + (dl.total ? ' (' + formatSize(dl.total) + ')' : '') + '...'
+              )}
+            </div>
+
+            {(dl.phase === 'starting' || dl.phase === 'downloading' || dl.phase === 'saving') && (
+              <div style={{ marginTop: '8px', fontSize: 'clamp(12px, 2.5vw, 13px)', color: '#94a3b8' }}>
+                No cierres la app ni toques "Descargar" de nuevo hasta ver el aviso de descarga completa.
+              </div>
+            )}
+
+            {(dl.phase === 'done' || dl.phase === 'error') && (
+              <button onClick={() => {
+                dlTimersRef.current.forEach(clearTimeout);
+                dlTimersRef.current = [];
+                dlLockRef.current = false;
+                setDl(null);
+                setDownloadingId(null);
+              }} style={{
+                marginTop: '14px', width: '100%', padding: '10px', border: 'none', borderRadius: '8px',
+                background: dl.phase === 'done' ? '#166534' : '#334155', color: '#fff',
+                fontSize: 'clamp(14px, 3vw, 15px)', fontWeight: 'bold', cursor: 'pointer',
+              }}>
+                Cerrar
+              </button>
+            )}
+          </div>
         </div>
       )}
 
