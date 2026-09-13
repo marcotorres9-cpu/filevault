@@ -20,13 +20,14 @@ interface FileItem {
   user?: { username: string };
 }
 
-type DlPhase = 'starting' | 'downloading' | 'saving' | 'done' | 'error';
+type DlPhase = 'starting' | 'downloading' | 'saving' | 'background' | 'done' | 'error';
 interface DlState {
   name: string;
   pct: number | null;
   got: number;
   total: number | null;
   phase: DlPhase;
+  hint?: string;
 }
 
 function formatSize(bytes: number): string {
@@ -62,6 +63,8 @@ export default function AppClient() {
   const dlLockRef = useRef(false);
   const dlTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const dlGenRef = useRef(0);
+  const dlActivityRef = useRef(0);      // ultima senal de descarga (nativa o web)
+  const dlNativeSeenRef = useRef(false); // si el APK ya reporto algo (puente v5+)
 
   useEffect(() => {
     const saved = localStorage.getItem('fv_token');
@@ -90,6 +93,8 @@ export default function AppClient() {
   useEffect(() => {
     window.__fvDlNative = (p) => {
       if (!p || typeof p !== 'object') return;
+      dlNativeSeenRef.current = true;
+      dlActivityRef.current = Date.now();
       if (p.state === 'start') {
         dlGenRef.current += 1;
         dlLockRef.current = true;
@@ -105,9 +110,9 @@ export default function AppClient() {
       } else if (p.state === 'done') {
         dlTimersRef.current.forEach(clearTimeout);
         dlTimersRef.current = [];
-        setDl(prev => prev ? { ...prev, phase: 'done', pct: 100, got: p.got || prev.got } : prev);
+        setDl(prev => prev ? { ...prev, phase: 'done', pct: 100, got: p.got || prev.got, hint: undefined } : prev);
         setDownloadingId(null);
-        dlTimersRef.current.push(setTimeout(() => { dlLockRef.current = false; setDl(null); }, 6000));
+        dlTimersRef.current.push(setTimeout(() => { dlLockRef.current = false; setDl(null); }, 8000));
         loadFiles();
       } else if (p.state === 'error') {
         dlTimersRef.current.forEach(clearTimeout);
@@ -181,6 +186,8 @@ export default function AppClient() {
     dlGenRef.current += 1;
     const gen = dlGenRef.current;
     dlLockRef.current = true;
+    dlActivityRef.current = Date.now();
+    dlNativeSeenRef.current = false;
     setDownloadingId(file.id);
 
     const url = token
@@ -196,9 +203,9 @@ export default function AppClient() {
     };
     const later = (fn: () => void, ms: number) => { dlTimersRef.current.push(setTimeout(fn, ms)); };
     const finishOk = () => {
-      setDl(prev => prev ? { ...prev, phase: 'done', pct: 100 } : prev);
+      setDl(prev => prev ? { ...prev, phase: 'done', pct: 100, hint: undefined } : prev);
       setDownloadingId(null);
-      later(() => { dlLockRef.current = false; setDl(null); }, 6000);
+      later(() => { dlLockRef.current = false; setDl(null); }, 8000);
     };
     const refreshFiles = () => {
       fetch('/api/files').then(r => r.json()).then(d => { if (d.files) setFiles(d.files); }).catch(() => {});
@@ -218,20 +225,29 @@ export default function AppClient() {
     if (inWebview || file.size > 250 * 1048576) {
       setDl({ name: file.originalName, pct: null, got: 0, total: file.size || null, phase: 'starting' });
       openNativeIframe();
-      // Si en 12s el app no confirmo (APK v4 sin puente), pasa a barra de actividad
+      // APK v5 reporta el inicio via __fvDlNative. Si en 10s no llego nada, es un
+      // APK viejo (v4, sin puente): barra de actividad + consejo de actualizar.
       later(() => {
         setDl(prev => (prev && prev.phase === 'starting') ? { ...prev, phase: 'downloading' } : prev);
-      }, 12000);
-      // Red de seguridad (APK v4 sin avisos): liberar a los 3 min
+        if (!dlNativeSeenRef.current) {
+          setDl(prev => prev && !prev.hint
+            ? { ...prev, hint: 'Consejo: actualiza tu app con el boton "Descargar APK" (arriba) y podras ver el porcentaje real.' }
+            : prev);
+        }
+      }, 10000);
+      // Red de seguridad ANTI-COLGADO: si a los 45s no hay ninguna senal reciente
+      // (APK v4 o sondeo nativo caido), la descarga sigue en el DownloadManager del
+      // sistema: se avisa, se libera el bloqueo y se cierra solo. NUNCA se queda colgado.
       later(() => {
-        setDl(prev => {
-          if (prev && prev.phase !== 'done' && prev.phase !== 'error' && prev.got === 0) {
-            return { ...prev, phase: 'done', pct: 100 };
-          }
-          return prev;
-        });
-        later(() => { dlLockRef.current = false; setDl(null); }, 6000);
-      }, 180000);
+        if (Date.now() - dlActivityRef.current < 40000) return; // el APK esta reportando
+        setDl(prev => (prev && (prev.phase === 'starting' || prev.phase === 'downloading'))
+          ? { ...prev, phase: 'background', pct: null } : prev);
+        dlLockRef.current = false;
+        setDownloadingId(null);
+        later(() => {
+          setDl(prev => (prev && prev.phase === 'background') ? null : prev);
+        }, 12000);
+      }, 45000);
       return;
     }
 
@@ -421,16 +437,17 @@ export default function AppClient() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
               <div style={{
                 width: '42px', height: '42px', borderRadius: '11px', flexShrink: 0,
-                background: dl.phase === 'done' ? '#166534' : dl.phase === 'error' ? '#7f1d1d' : '#1d4ed8',
+                background: dl.phase === 'done' ? '#166534' : dl.phase === 'error' ? '#7f1d1d' : dl.phase === 'background' ? '#92400e' : '#1d4ed8',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '20px', color: '#fff', fontWeight: 'bold',
               }}>
-                {dl.phase === 'done' ? '\u2713' : dl.phase === 'error' ? '!' : '\u2193'}
+                {dl.phase === 'done' ? '\u2713' : dl.phase === 'error' ? '!' : dl.phase === 'background' ? '\u2197' : '\u2193'}
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 'clamp(16px, 3.5vw, 18px)', fontWeight: 'bold', color: '#f8fafc' }}>
                   {dl.phase === 'done' ? 'Descarga completa'
                     : dl.phase === 'error' ? 'Error en la descarga'
+                    : dl.phase === 'background' ? 'Descarga en segundo plano'
                     : dl.phase === 'saving' ? 'Guardando archivo...'
                     : dl.phase === 'starting' ? 'Iniciando descarga...'
                     : 'Descargando...'}
@@ -441,7 +458,7 @@ export default function AppClient() {
               </div>
             </div>
 
-            {dl.phase !== 'done' && dl.phase !== 'error' && (
+            {dl.phase !== 'done' && dl.phase !== 'error' && dl.phase !== 'background' && (
               <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '7px', height: '16px', overflow: 'hidden' }}>
                 {dl.pct !== null ? (
                   <div style={{
@@ -459,6 +476,7 @@ export default function AppClient() {
             <div style={{ marginTop: '12px', fontSize: 'clamp(14px, 3vw, 15px)', color: '#e2e8f0', fontWeight: '600' }}>
               {dl.phase === 'done' && 'El archivo se guardo en tu carpeta "Descargas".'}
               {dl.phase === 'error' && 'No se pudo descargar. Vuelve a intentarlo.'}
+              {dl.phase === 'background' && 'Tu dispositivo sigue guardando el archivo en la carpeta "Descargas". Puedes usar la app con normalidad; si todavia no aparece, espera un momento y revisa esa carpeta.'}
               {dl.phase === 'saving' && 'Preparando el archivo para guardarlo...'}
               {dl.phase === 'starting' && 'Conectando con el servidor...'}
               {dl.phase === 'downloading' && (
@@ -466,31 +484,38 @@ export default function AppClient() {
                   ? dl.pct + '% \u2014 ' + formatSize(dl.got) + (dl.total ? ' de ' + formatSize(dl.total) : '')
                   : dl.got > 0
                     ? formatSize(dl.got) + ' descargados...'
-                    : 'Descargando en tu dispositivo' + (dl.total ? ' (' + formatSize(dl.total) + ')' : '') + '...'
+                    : 'Descargando en tu dispositivo' + (dl.total ? ' (' + formatSize(dl.total) + ')' : '') + '. Al terminar queda en tu carpeta "Descargas".'
               )}
             </div>
 
-            {(dl.phase === 'starting' || dl.phase === 'downloading' || dl.phase === 'saving') && (
-              <div style={{ marginTop: '8px', fontSize: 'clamp(12px, 2.5vw, 13px)', color: '#94a3b8' }}>
-                No cierres la app ni toques "Descargar" de nuevo hasta ver el aviso de descarga completa.
+            {dl.hint && (
+              <div style={{ marginTop: '8px', fontSize: 'clamp(12px, 2.5vw, 13px)', color: '#fbbf24', fontWeight: '600' }}>
+                {dl.hint}
               </div>
             )}
 
-            {(dl.phase === 'done' || dl.phase === 'error') && (
-              <button onClick={() => {
-                dlTimersRef.current.forEach(clearTimeout);
-                dlTimersRef.current = [];
-                dlLockRef.current = false;
-                setDl(null);
-                setDownloadingId(null);
-              }} style={{
-                marginTop: '14px', width: '100%', padding: '10px', border: 'none', borderRadius: '8px',
-                background: dl.phase === 'done' ? '#166534' : '#334155', color: '#fff',
-                fontSize: 'clamp(14px, 3vw, 15px)', fontWeight: 'bold', cursor: 'pointer',
-              }}>
-                Cerrar
-              </button>
+            {(dl.phase === 'starting' || dl.phase === 'downloading' || dl.phase === 'saving') && (
+              <div style={{ marginTop: '8px', fontSize: 'clamp(12px, 2.5vw, 13px)', color: '#94a3b8' }}>
+                Puedes cerrar este cuadro y la descarga sigue. No toques "Descargar" de nuevo hasta ver el aviso final.
+              </div>
             )}
+
+            <button onClick={() => {
+              dlTimersRef.current.forEach(clearTimeout);
+              dlTimersRef.current = [];
+              dlLockRef.current = false;
+              setDl(null);
+              setDownloadingId(null);
+            }} style={{
+              marginTop: '14px', width: '100%', padding: '10px', border: 'none', borderRadius: '8px',
+              background: dl.phase === 'done' ? '#166534' : dl.phase === 'background' ? '#92400e' : '#334155', color: '#fff',
+              fontSize: 'clamp(14px, 3vw, 15px)', fontWeight: 'bold', cursor: 'pointer',
+            }}>
+              {dl.phase === 'done' ? 'Cerrar'
+                : dl.phase === 'error' ? 'Cerrar'
+                : dl.phase === 'background' ? 'Entendido'
+                : 'Seguir en segundo plano'}
+            </button>
           </div>
         </div>
       )}
