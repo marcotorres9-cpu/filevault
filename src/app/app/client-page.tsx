@@ -90,6 +90,7 @@ export default function AppClient() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [dl, setDl] = useState<DlState | null>(null);
+  const [apkVersion, setApkVersion] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dlLockRef = useRef(false);
   const dlTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -103,6 +104,18 @@ export default function AppClient() {
     const savedUser = localStorage.getItem('fv_username');
     if (saved) setToken(saved);
     if (savedUser) setUsername(savedUser);
+  }, []);
+
+  // Version del APK instalado (puente nativo v5.0+): visible en el header
+  useEffect(() => {
+    try {
+      const w = window as unknown as { FvAndroid?: { isApp?: () => boolean; version?: () => string } };
+      if (w.FvAndroid && typeof w.FvAndroid.isApp === 'function' && w.FvAndroid.isApp()
+          && typeof w.FvAndroid.version === 'function') {
+        const v = w.FvAndroid.version();
+        if (v) setApkVersion(v);
+      }
+    } catch {}
   }, []);
 
   const loadFiles = async () => {
@@ -542,6 +555,34 @@ export default function AppClient() {
           <p style={{ fontSize: 'clamp(12px, 2.5vw, 14px)', color: '#94a3b8', margin: '2px 0 0 0' }}>
             Alojamiento de archivos
           </p>
+          {(() => {
+            const FV_LATEST = '5.3';
+            if (apkVersion) {
+              const old = parseFloat(apkVersion) < parseFloat(FV_LATEST);
+              return (
+                <span style={{
+                  display: 'inline-block', marginTop: '6px',
+                  background: old ? '#7f1d1d' : '#14532d',
+                  color: old ? '#fca5a5' : '#86efac',
+                  padding: '3px 12px', borderRadius: '999px',
+                  fontSize: 'clamp(11px, 2.2vw, 13px)', fontWeight: '700',
+                }}>
+                  {old
+                    ? 'App instalada: v' + apkVersion + ' (vieja) — toca "Descargar APK" para actualizar a v' + FV_LATEST
+                    : 'App instalada: v' + apkVersion + ' (al dia)'}
+                </span>
+              );
+            }
+            return (
+              <span style={{
+                display: 'inline-block', marginTop: '6px', background: '#1e3a5f', color: '#93c5fd',
+                padding: '3px 12px', borderRadius: '999px',
+                fontSize: 'clamp(11px, 2.2vw, 13px)', fontWeight: '700',
+              }}>
+                Version actual de la app: {FV_LATEST}
+              </span>
+            );
+          })()}
         </div>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           <a href="/apk" style={{
