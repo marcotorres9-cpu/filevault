@@ -91,6 +91,8 @@ export default function AppClient() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [dl, setDl] = useState<DlState | null>(null);
   const [apkVersion, setApkVersion] = useState<string | null>(null);
+  // Ultima version publicada de la APK (se muestra en header y footer)
+  const FV_LATEST = '5.4';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dlLockRef = useRef(false);
   const dlTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -556,7 +558,6 @@ export default function AppClient() {
             Alojamiento de archivos
           </p>
           {(() => {
-            const FV_LATEST = '5.3';
             if (apkVersion) {
               const old = parseFloat(apkVersion) < parseFloat(FV_LATEST);
               return (
@@ -931,7 +932,7 @@ export default function AppClient() {
 
       {/* Footer */}
       <div style={{ textAlign: 'center', marginTop: 'clamp(16px, 3vw, 24px)', fontSize: 'clamp(11px, 2vw, 12px)', color: '#475569' }}>
-        FileVault v3.5
+        FileVault v{apkVersion || FV_LATEST}
       </div>
     </div>
   );
